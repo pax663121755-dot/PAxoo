@@ -44,10 +44,45 @@ VAR
     fFilterAlpha : LREAL := 0.2;
 
     fTuneStartTemp : LREAL := 0.0;
-    fTuneDeltaTemp : LREAL := 0.0;
-    fTuneGain : LREAL := 0.0;
-    fTuneTau : LREAL := 1.0;
     fObserveS : LREAL := 120.0;
+    fTuneElapsedS : LREAL := 0.0;
+    fTuneDeltaTemp : LREAL := 0.0;
+    fTuneStepPct : LREAL := 0.0;
+    fTuneNoiseBand : LREAL := 0.2;
+    fTuneLambdaFactor : LREAL := 1.0;
+    bTuneResponseDetected : BOOL := FALSE;
+    fTuneDeadTimeS : LREAL := 0.0;
+
+    // Probkowanie odpowiedzi do dopasowania modelu FOPDT
+    nTuneSampleCount : INT := 0;
+    fTuneSamplePeriodS : LREAL := 1.0;
+    fTuneNextSampleAtS : LREAL := 0.0;
+    aTuneTimeS : ARRAY[1..600] OF LREAL;
+    aTuneDeltaTemp : ARRAY[1..600] OF LREAL;
+
+    // Zmienne dopasowania i strojenia
+    nFitIdx : INT := 0;
+    nTauStepIdx : INT := 0;
+    fTauMinS : LREAL := 0.5;
+    fTauMaxS : LREAL := 1.0;
+    fTauStepS : LREAL := 0.5;
+    fTauCandidateS : LREAL := 1.0;
+    fTauBestS : LREAL := 1.0;
+    fFitDtS : LREAL := 0.0;
+    fFitPhi : LREAL := 0.0;
+    fFitModel : LREAL := 0.0;
+    fFitSxx : LREAL := 0.0;
+    fFitSxy : LREAL := 0.0;
+    fFitA : LREAL := 0.0;
+    fFitABest : LREAL := 0.0;
+    fFitErr : LREAL := 0.0;
+    fFitBestErr : LREAL := 0.0;
+    fProcessGainDegCPerPct : LREAL := 0.0;
+    fLambdaS : LREAL := 1.0;
+    fTiS : LREAL := 1.0;
+    fTdS : LREAL := 0.0;
+    fThermalResistanceKPerW : LREAL := 0.0;
+    fThermalCapacityJPerK : LREAL := 0.0;
 END_VAR
 ]]></Declaration>
     <Implementation>
@@ -75,7 +110,26 @@ IF EN THEN
         bAutoTuneDone := FALSE;
         bAutoTuneError := FALSE;
         bAutoTuneTimerIn := TRUE;
+
         fTuneStartTemp := fPvFiltered;
+        fTuneElapsedS := 0.0;
+        fTuneDeltaTemp := 0.0;
+        fTuneStepPct := LIMIT(1.0, ABS(stParams.fAutoTuneStep), 100.0);
+        fTuneNoiseBand := MAX(0.01, ABS(stParams.fAutoTuneNoiseBand));
+        fTuneLambdaFactor := MAX(0.1, stParams.fAutoTuneLambdaFactor);
+        bTuneResponseDetected := FALSE;
+        fTuneDeadTimeS := 0.0;
+
+        nTuneSampleCount := 0;
+        fTuneSamplePeriodS := LIMIT(0.2, fObserveS / 600.0, 5.0);
+        fTuneNextSampleAtS := 0.0;
+
+        stParams.fIdentProcessGainDegCPerPct := 0.0;
+        stParams.fIdentDeadTimeS := 0.0;
+        stParams.fIdentTimeConstantS := 0.0;
+        stParams.fIdentThermalResistanceKPerW := 0.0;
+        stParams.fIdentThermalCapacityJPerK := 0.0;
+
         fIntegral := 0.0;
         fPrevError := 0.0;
     END_IF;
@@ -83,9 +137,23 @@ IF EN THEN
 
     IF bAutoTuneBusy THEN
         bAutoTuneTimerIn := TRUE;
+        fTuneElapsedS := TIME_TO_LREAL(fbAutoTuneTimer.ET) / 1000.0;
+        fTuneDeltaTemp := fPvFiltered - fTuneStartTemp;
+
+        IF (nTuneSampleCount < 600) AND (fTuneElapsedS >= fTuneNextSampleAtS) THEN
+            nTuneSampleCount := nTuneSampleCount + 1;
+            aTuneTimeS[nTuneSampleCount] := fTuneElapsedS;
+            aTuneDeltaTemp[nTuneSampleCount] := fTuneDeltaTemp;
+            fTuneNextSampleAtS := fTuneNextSampleAtS + fTuneSamplePeriodS;
+        END_IF;
+
+        IF (NOT bTuneResponseDetected) AND (ABS(fTuneDeltaTemp) >= fTuneNoiseBand) THEN
+            bTuneResponseDetected := TRUE;
+            fTuneDeadTimeS := fTuneElapsedS;
+        END_IF;
 
         // W trakcie autotune wymuszamy krok grzania
-        fPidClamped := LIMIT(0.0, ABS(stParams.fAutoTuneStep), 100.0);
+        fPidClamped := fTuneStepPct;
         fAnalogOutputPct := fPidClamped;
         fHeatAnalogPct := fPidClamped;
         fCoolAnalogPct := 0.0;
@@ -96,18 +164,89 @@ IF EN THEN
         IF fbAutoTuneTimer.Q THEN
             bAutoTuneBusy := FALSE;
             bAutoTuneTimerIn := FALSE;
-
+            fTuneElapsedS := TIME_TO_LREAL(fbAutoTuneTimer.ET) / 1000.0;
             fTuneDeltaTemp := fPvFiltered - fTuneStartTemp;
-            IF ABS(fTuneDeltaTemp) >= ABS(stParams.fAutoTuneNoiseBand) THEN
-                fTuneGain := fTuneDeltaTemp / MAX(1.0, ABS(stParams.fAutoTuneStep));
-                IF ABS(fTuneGain) > 0.000001 THEN
-                    // Prosta identyfikacja FOPDT + strojenie IMC
-                    fTuneTau := MAX(0.5, fObserveS * 0.5);
-                    stParams.fKp := ABS(1.0 / fTuneGain);
-                    stParams.fKi := stParams.fKp / fTuneTau;
-                    stParams.fKd := stParams.fKp * fTuneTau * 0.25;
-                    bAutoTuneDone := TRUE;
-                    bAutoTuneError := FALSE;
+
+            IF bTuneResponseDetected AND (nTuneSampleCount >= 5) THEN
+                fTauMinS := 0.5;
+                fTauMaxS := MAX(fTauMinS + 0.5, fObserveS - fTuneDeadTimeS);
+                fTauStepS := MAX(0.1, (fTauMaxS - fTauMinS) / 80.0);
+                fFitBestErr := 1.0E+30;
+                fTauBestS := fTauMinS;
+                fFitABest := 0.0;
+
+                FOR nTauStepIdx := 0 TO 80 DO
+                    fTauCandidateS := fTauMinS + (INT_TO_LREAL(nTauStepIdx) * fTauStepS);
+                    IF fTauCandidateS > fTauMaxS THEN
+                        fTauCandidateS := fTauMaxS;
+                    END_IF;
+
+                    fFitSxx := 0.0;
+                    fFitSxy := 0.0;
+                    FOR nFitIdx := 1 TO nTuneSampleCount DO
+                        fFitDtS := aTuneTimeS[nFitIdx] - fTuneDeadTimeS;
+                        IF fFitDtS > 0.0 THEN
+                            fFitPhi := 1.0 - EXP(-fFitDtS / fTauCandidateS);
+                            fFitSxx := fFitSxx + (fFitPhi * fFitPhi);
+                            fFitSxy := fFitSxy + (fFitPhi * aTuneDeltaTemp[nFitIdx]);
+                        END_IF;
+                    END_FOR;
+
+                    IF fFitSxx > 1.0E-9 THEN
+                        fFitA := fFitSxy / fFitSxx;
+                        fFitErr := 0.0;
+                        FOR nFitIdx := 1 TO nTuneSampleCount DO
+                            fFitDtS := aTuneTimeS[nFitIdx] - fTuneDeadTimeS;
+                            IF fFitDtS > 0.0 THEN
+                                fFitModel := fFitA * (1.0 - EXP(-fFitDtS / fTauCandidateS));
+                            ELSE
+                                fFitModel := 0.0;
+                            END_IF;
+                            fFitErr := fFitErr + ((aTuneDeltaTemp[nFitIdx] - fFitModel) * (aTuneDeltaTemp[nFitIdx] - fFitModel));
+                        END_FOR;
+
+                        IF fFitErr < fFitBestErr THEN
+                            fFitBestErr := fFitErr;
+                            fTauBestS := fTauCandidateS;
+                            fFitABest := fFitA;
+                        END_IF;
+                    END_IF;
+                END_FOR;
+
+                IF ABS(fFitABest) >= fTuneNoiseBand THEN
+                    fProcessGainDegCPerPct := fFitABest / fTuneStepPct;
+                    IF ABS(fProcessGainDegCPerPct) > 1.0E-6 THEN
+                        stParams.fIdentProcessGainDegCPerPct := fProcessGainDegCPerPct;
+                        stParams.fIdentDeadTimeS := fTuneDeadTimeS;
+                        stParams.fIdentTimeConstantS := fTauBestS;
+
+                        IF stParams.fHeaterPowerNominalW > 0.0 THEN
+                            fThermalResistanceKPerW := (100.0 * ABS(fProcessGainDegCPerPct)) / stParams.fHeaterPowerNominalW;
+                            IF fThermalResistanceKPerW > 1.0E-9 THEN
+                                fThermalCapacityJPerK := fTauBestS / fThermalResistanceKPerW;
+                            ELSE
+                                fThermalCapacityJPerK := 0.0;
+                            END_IF;
+                        ELSE
+                            fThermalResistanceKPerW := 0.0;
+                            fThermalCapacityJPerK := 0.0;
+                        END_IF;
+                        stParams.fIdentThermalResistanceKPerW := fThermalResistanceKPerW;
+                        stParams.fIdentThermalCapacityJPerK := fThermalCapacityJPerK;
+
+                        // Strojenie IMC-PID dla modelu FOPDT
+                        fLambdaS := MAX(1.0, fTuneLambdaFactor * (fTauBestS + fTuneDeadTimeS));
+                        stParams.fKp := fTauBestS / (ABS(fProcessGainDegCPerPct) * (fLambdaS + fTuneDeadTimeS));
+                        fTiS := MAX(0.5, fTauBestS + (0.5 * fTuneDeadTimeS));
+                        fTdS := (fTauBestS * fTuneDeadTimeS) / MAX(0.001, (2.0 * fTauBestS + fTuneDeadTimeS));
+                        stParams.fKi := stParams.fKp / fTiS;
+                        stParams.fKd := stParams.fKp * fTdS;
+
+                        bAutoTuneDone := TRUE;
+                        bAutoTuneError := FALSE;
+                    ELSE
+                        bAutoTuneError := TRUE;
+                    END_IF;
                 ELSE
                     bAutoTuneError := TRUE;
                 END_IF;
@@ -173,9 +312,36 @@ ELSE
     fPidRaw := 0.0;
     fPidClamped := 0.0;
     fTuneStartTemp := 0.0;
+    fTuneElapsedS := 0.0;
     fTuneDeltaTemp := 0.0;
-    fTuneGain := 0.0;
-    fTuneTau := 1.0;
+    fTuneStepPct := 0.0;
+    fTuneNoiseBand := 0.2;
+    fTuneLambdaFactor := 1.0;
+    bTuneResponseDetected := FALSE;
+    fTuneDeadTimeS := 0.0;
+    nTuneSampleCount := 0;
+    fTuneSamplePeriodS := 1.0;
+    fTuneNextSampleAtS := 0.0;
+    fTauMinS := 0.5;
+    fTauMaxS := 1.0;
+    fTauStepS := 0.5;
+    fTauCandidateS := 1.0;
+    fTauBestS := 1.0;
+    fFitDtS := 0.0;
+    fFitPhi := 0.0;
+    fFitModel := 0.0;
+    fFitSxx := 0.0;
+    fFitSxy := 0.0;
+    fFitA := 0.0;
+    fFitABest := 0.0;
+    fFitErr := 0.0;
+    fFitBestErr := 0.0;
+    fProcessGainDegCPerPct := 0.0;
+    fLambdaS := 1.0;
+    fTiS := 1.0;
+    fTdS := 0.0;
+    fThermalResistanceKPerW := 0.0;
+    fThermalCapacityJPerK := 0.0;
 END_IF;
 
 fbAutoTuneTimer(IN := bAutoTuneTimerIn, PT := stParams.tAutoTuneObserve);

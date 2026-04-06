@@ -28,6 +28,15 @@ STRUCT
     fAutoTuneStep : LREAL := 25.0; // [%]
     tAutoTuneObserve : TIME := T#120S;
     fAutoTuneNoiseBand : LREAL := 0.2;
+    fAutoTuneLambdaFactor : LREAL := 1.0; // >0, im wiecej tym spokojniejszy regulator
+    fHeaterPowerNominalW : LREAL := 1000.0; // moc 100% grzania [W], do wyliczenia Cth
+
+    // Wynik identyfikacji procesu (HMI/diagnostyka)
+    fIdentProcessGainDegCPerPct : LREAL := 0.0; // Kproc [degC/%]
+    fIdentDeadTimeS : LREAL := 0.0;             // L [s]
+    fIdentTimeConstantS : LREAL := 0.0;         // T [s]
+    fIdentThermalResistanceKPerW : LREAL := 0.0; // Rth [K/W]
+    fIdentThermalCapacityJPerK : LREAL := 0.0;   // Cth [J/K]
 END_STRUCT
 END_TYPE
 ]]></Declaration>

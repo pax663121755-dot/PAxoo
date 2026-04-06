@@ -11,7 +11,12 @@ W repo dodano gotowy zestaw plikow:
   - regulacja PID
   - wyjscie analogowe signed `-100..100`
   - osobne wyjscia analogowe `grzanie/chlodzenie` oraz wyjscia cyfrowe
-  - funkcja autotuningu (prosty krok grzania + wyliczenie Kp/Ki/Kd)
+  - funkcja autotuningu z identyfikacja FOPDT:
+    - wykrycie opoznienia `L`
+    - estymacja stalej czasowej `T`
+    - estymacja wzmocnienia procesu `Kproc`
+    - wyliczenie `Rth` i `Cth` (przy zadanej mocy grzalki)
+    - strojenie IMC-PID na podstawie modelu
 - `TwinCAT/PRG_TemperatureControlDemo.TcPOU`
   - prosty program demonstracyjny podlaczenia pod HMI
 
@@ -29,3 +34,19 @@ W repo dodano gotowy zestaw plikow:
    - analog signed: `fAnalogOutputPct`
    - analog grzanie/chlodzenie: `fHeatAnalogPct`, `fCoolAnalogPct`
    - cyfrowe: `bHeatOn`, `bCoolOn`
+
+## Parametry autotune i diagnostyka modelu
+
+W `ST_TemperatureControlParams`:
+- wejscia autotune:
+  - `fAutoTuneStep` - krok mocy grzania [%]
+  - `tAutoTuneObserve` - czas obserwacji odpowiedzi skokowej
+  - `fAutoTuneNoiseBand` - prog wykrycia startu odpowiedzi
+  - `fAutoTuneLambdaFactor` - agresywnosc strojenia IMC
+  - `fHeaterPowerNominalW` - moc grzalki przy 100% (do Cth)
+- wyniki identyfikacji:
+  - `fIdentProcessGainDegCPerPct`
+  - `fIdentDeadTimeS`
+  - `fIdentTimeConstantS`
+  - `fIdentThermalResistanceKPerW`
+  - `fIdentThermalCapacityJPerK`
