@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <DUT Name="ST_HeatingPlantSimParams" Id="{e9e13e7a-8d0b-4fe2-9d18-36916abeb6bb}">
+    <Declaration><![CDATA[
+TYPE ST_HeatingPlantSimParams :
+STRUCT
+    // Warunki otoczenia i krok symulacji
+    fAmbientTempDegC : LREAL := 22.0;
+    fCycleTimeS : LREAL := 0.1;
+
+    // Stan poczatkowy
+    fProcessInitTempDegC : LREAL := 22.0;
+    fHeaterInitTempDegC : LREAL := 22.0;
+
+    // Model grzalki
+    fHeaterTargetRiseAt100DegC : LREAL := 180.0; // wzrost temp. grzalki ponad otoczenie przy 100%
+    fHeaterWarmupTauS : LREAL := 25.0;           // bezwladnosc grzalki
+    fHeaterLossBasePerS : LREAL := 0.003;        // bazowe stygnięcie grzalki
+    fHeaterLossOffBoostPerS : LREAL := 0.020;    // dodatkowe stygnięcie wraz z czasem bez zasilania
+
+    // Transfer ciepla grzalka -> obiekt (narasta gdy grzalka goraca)
+    fHeatTransferBasePerS : LREAL := 0.004;
+    fHeatTransferHotBoostPerS : LREAL := 0.020;
+
+    // Straty ciepla obiektu (przy odcieciu rosna wraz z czasem OFF)
+    fProcessLossBasePerS : LREAL := 0.001;
+    fProcessLossOffBoostPerS : LREAL := 0.010;
+    tOffAccelerationWindow : TIME := T#90S; // po tym czasie osiagane jest maks. przyspieszenie chlodzenia
+
+    // Dodatkowe aktywne chlodzenie (opcjonalnie)
+    fCoolerGainDegCPerSAt100 : LREAL := 2.0;
+
+    // Ograniczenia symulowanej temperatury obiektu
+    fProcessMinTemp : LREAL := -50.0;
+    fProcessMaxTemp : LREAL := 350.0;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

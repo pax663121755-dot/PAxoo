@@ -19,6 +19,11 @@ W repo dodano gotowy zestaw plikow:
     - strojenie IMC-PID na podstawie modelu
 - `TwinCAT/PRG_TemperatureControlDemo.TcPOU`
   - prosty program demonstracyjny podlaczenia pod HMI
+- `TwinCAT/ST_HeatingPlantSimParams.TcDUT`
+  - parametry modelu symulacji obiektu grzania/chlodzenia
+- `TwinCAT/FB_HeatingPlantSimulator.TcPOU`
+  - symulator obiektu: wolny start narastania, szybszy przyrost po rozgrzaniu grzalki
+  - po odcieciu mocy chlodzenie przyspiesza wraz z czasem bez zasilania
 
 ## Szybkie uzycie
 
@@ -34,6 +39,19 @@ W repo dodano gotowy zestaw plikow:
    - analog signed: `fAnalogOutputPct`
    - analog grzanie/chlodzenie: `fHeatAnalogPct`, `fCoolAnalogPct`
    - cyfrowe: `bHeatOn`, `bCoolOn`
+
+## Symulator obiektu grzania
+
+W `PRG_TemperatureControlDemo` dodano:
+- `stSimParams : ST_HeatingPlantSimParams`
+- `fbPlantSim : FB_HeatingPlantSimulator`
+
+Symulator otrzymuje sterowanie:
+- `fHeatCmdPct` (grzanie 0..100%)
+- `fCoolCmdPct` (chlodzenie 0..100%)
+- `fAmbientTemp` (temperatura otoczenia)
+
+oraz zwraca temperature procesu (`fTemperaturePv`), ktora mozna podac bezposrednio na wejscie regulatora.
 
 ## Parametry autotune i diagnostyka modelu
 

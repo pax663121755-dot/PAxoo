@@ -20,10 +20,30 @@ VAR
     bDoHeat : BOOL;
     bDoCool : BOOL;
     bAutoTuneBusy : BOOL;
+
+    // Symulator obiektu grzania/chlodzenia (opcjonalnie pod HMI/test)
+    stSimParams : ST_HeatingPlantSimParams;
+    fbPlantSim : FB_HeatingPlantSimulator;
+    bUseSimulation : BOOL := TRUE;
+    fAmbientTemperature : LREAL := 22.0;
+    fTemperaturePvReal : LREAL := 24.5;
 END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[
+IF bUseSimulation THEN
+    fbPlantSim(
+        EN := TRUE,
+        fHeatCmdPct := fbTempControl.fHeatAnalogPct,
+        fCoolCmdPct := fbTempControl.fCoolAnalogPct,
+        fAmbientTemp := fAmbientTemperature,
+        stParams := stSimParams
+    );
+    fTemperaturePv := fbPlantSim.fTemperaturePv;
+ELSE
+    fTemperaturePv := fTemperaturePvReal;
+END_IF;
+
 // Przyklad wywolania bloku
 fbTempControl(
     EN := bEnableControl,
