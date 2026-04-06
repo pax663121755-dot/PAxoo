@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <POU Name="FB_HeatingPlantPhysicalSimulator" Id="{74b182f0-c3fa-4ef1-95f3-f4975d6949df}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_HeatingPlantPhysicalSimulator
+VAR_INPUT
+    EN : BOOL := TRUE;
+    fHeatCmdPct : LREAL; // 0..100 [%]
+    fCoolCmdPct : LREAL; // 0..100 [%]
+    fAmbientTemp : LREAL; // [degC]
+    fDisturbancePct : LREAL; // -100..100, ujemne = wychladzanie, dodatnie = dogrzewanie procesu
+END_VAR
+VAR_IN_OUT
+    stParams : ST_HeatingPlantPhysicalSimParams;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+    fTemperaturePv : LREAL;     // temperatura procesu [degC]
+    fHeaterCoreTemp : LREAL;    // temperatura rdzenia grzalki [degC]
+    fDisturbancePowerW : LREAL; // moc zaklocenia [W]
+END_VAR
+VAR
+    bInitialized : BOOL := FALSE;
+    fCycleS : LREAL := 0.1;
+    fHeatPct : LREAL := 0.0;
+    fCoolPct : LREAL := 0.0;
+    fDistPct : LREAL := 0.0;
+    fOffTimeS : LREAL := 0.0;
+    fOffWindowS : LREAL := 120.0;
+    fOffFactor : LREAL := 0.0;
+    fRHeaterToAmbientEff : LREAL := 1.2;
+    fRProcessToAmbientEff : LREAL := 2.0;
+
+    // Bilans mocy [W]
+    fHeaterPowerInW : LREAL := 0.0;
+    fCoolerPowerOutW : LREAL := 0.0;
+    fHeatFlowToProcessW : LREAL := 0.0;
+    fLossHeaterToAmbientW : LREAL := 0.0;
+    fLossProcessToAmbientW : LREAL := 0.0;
+
+    // Pochodne temperatur [K/s]
+    fHeaterDdt : LREAL := 0.0;
+    fProcessDdt : LREAL := 0.0;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    fCycleS := LIMIT(0.01, stParams.fCycleTimeS, 10.0);
+    fHeatPct := LIMIT(0.0, fHeatCmdPct, 100.0);
+    fCoolPct := LIMIT(0.0, fCoolCmdPct, 100.0);
+    fDistPct := LIMIT(-100.0, fDisturbancePct, 100.0);
+    fOffWindowS := MAX(1.0, TIME_TO_LREAL(stParams.tOffAccelerationWindow) / 1000.0);
+
+    IF NOT bInitialized THEN
+        fTemperaturePv := stParams.fProcessInitTempDegC;
+        fHeaterCoreTemp := stParams.fHeaterInitTempDegC;
+        fOffTimeS := 0.0;
+        bInitialized := TRUE;
+    END_IF;
+
+    IF fHeatPct > 0.01 THEN
+        fOffTimeS := 0.0;
+    ELSE
+        fOffTimeS := fOffTimeS + fCycleS;
+    END_IF;
+    fOffFactor := LIMIT(0.0, fOffTimeS / fOffWindowS, 1.0);
+
+    // Po odcieciu grzania (OFF) rezystancje do otoczenia maleja,
+    // co daje szybsze schladzanie im dluzej trwa OFF.
+    fRHeaterToAmbientEff :=
+        MAX(
+            0.001,
+            stParams.fRthHeaterToAmbientKPerW
+            * (1.0 - ((LIMIT(0.0, stParams.fOffBoostHeaterLossPct, 95.0) / 100.0) * fOffFactor))
+        );
+    fRProcessToAmbientEff :=
+        MAX(
+            0.001,
+            stParams.fRthProcessToAmbientKPerW
+            * (1.0 - ((LIMIT(0.0, stParams.fOffBoostProcessLossPct, 95.0) / 100.0) * fOffFactor))
+        );
+
+    // Zrodla/odpływy mocy
+    fHeaterPowerInW := MAX(0.0, stParams.fHeaterPowerNominalW) * (fHeatPct / 100.0);
+    fCoolerPowerOutW := MAX(0.0, stParams.fCoolerPowerNominalW) * (fCoolPct / 100.0);
+    fDisturbancePowerW := stParams.fDisturbancePowerNominalW * (fDistPct / 100.0);
+
+    // Sprzezenie cieplne rdzen->proces i straty do ambient
+    fHeatFlowToProcessW := (fHeaterCoreTemp - fTemperaturePv) / MAX(0.001, stParams.fRthHeaterToProcessKPerW);
+    fLossHeaterToAmbientW := (fHeaterCoreTemp - fAmbientTemp) / fRHeaterToAmbientEff;
+    fLossProcessToAmbientW := (fTemperaturePv - fAmbientTemp) / fRProcessToAmbientEff;
+
+    // Rownania energii (model R-C-C)
+    // C_h * dTh/dt = P_heater - Q_h->p - Q_h->amb
+    // C_p * dTp/dt = Q_h->p - Q_p->amb - P_cooler + P_disturbance
+    fHeaterDdt :=
+        (fHeaterPowerInW - fHeatFlowToProcessW - fLossHeaterToAmbientW)
+        / MAX(0.1, stParams.fHeaterCapacityJPerK);
+    fProcessDdt :=
+        (fHeatFlowToProcessW - fLossProcessToAmbientW - fCoolerPowerOutW + fDisturbancePowerW)
+        / MAX(0.1, stParams.fProcessCapacityJPerK);
+
+    // Dyskretyzacja Eulera
+    fHeaterCoreTemp := fHeaterCoreTemp + (fHeaterDdt * fCycleS);
+    fTemperaturePv := fTemperaturePv + (fProcessDdt * fCycleS);
+
+    // Ograniczenia bezpieczenstwa symulacji
+    fHeaterCoreTemp := LIMIT(stParams.fHeaterMinTemp, fHeaterCoreTemp, stParams.fHeaterMaxTemp);
+    fTemperaturePv := LIMIT(stParams.fProcessMinTemp, fTemperaturePv, stParams.fProcessMaxTemp);
+ELSE
+    // Reset bloku do stanu 0 gdy EN=FALSE
+    bInitialized := FALSE;
+    fTemperaturePv := 0.0;
+    fHeaterCoreTemp := 0.0;
+    fOffTimeS := 0.0;
+    fOffWindowS := 120.0;
+    fOffFactor := 0.0;
+    fRHeaterToAmbientEff := 1.2;
+    fRProcessToAmbientEff := 2.0;
+    fDisturbancePowerW := 0.0;
+    fHeaterPowerInW := 0.0;
+    fCoolerPowerOutW := 0.0;
+    fHeatFlowToProcessW := 0.0;
+    fLossHeaterToAmbientW := 0.0;
+    fLossProcessToAmbientW := 0.0;
+    fHeaterDdt := 0.0;
+    fProcessDdt := 0.0;
+END_IF;
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

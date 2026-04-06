@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <POU Name="FB_HeatingPlantSimulator" Id="{0d7f2ce2-8e7d-4f53-a9c5-e5e68a2492f3}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_HeatingPlantSimulator
+VAR_INPUT
+    EN : BOOL := TRUE;
+    fHeatCmdPct : LREAL; // 0..100 [%]
+    fCoolCmdPct : LREAL; // 0..100 [%]
+    fAmbientTemp : LREAL; // temperatura otoczenia z HMI/symulacji
+END_VAR
+VAR_IN_OUT
+    stParams : ST_HeatingPlantSimParams;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+    fTemperaturePv : LREAL;
+    fHeaterCoreTemp : LREAL;
+END_VAR
+VAR
+    bInitialized : BOOL := FALSE;
+    fCycleS : LREAL := 0.1;
+    fAmbient : LREAL := 20.0;
+    fHeatPct : LREAL := 0.0;
+    fCoolPct : LREAL := 0.0;
+    fOffTimeS : LREAL := 0.0;
+    fOffWindowS : LREAL := 90.0;
+    fOffFactor : LREAL := 0.0;
+    fHeaterTargetTemp : LREAL := 20.0;
+    fHeaterTauS : LREAL := 25.0;
+    fHeaterLossPerS : LREAL := 0.0;
+    fHeaterHotFactor : LREAL := 0.0;
+    fHeatTransferPerS : LREAL := 0.0;
+    fHeatFlow : LREAL := 0.0;
+    fProcessLossPerS : LREAL := 0.0;
+    fProcessAmbientLoss : LREAL := 0.0;
+    fCoolerLoss : LREAL := 0.0;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    fCycleS := LIMIT(0.01, stParams.fCycleTimeS, 10.0);
+    fAmbient := fAmbientTemp;
+    fHeatPct := LIMIT(0.0, fHeatCmdPct, 100.0);
+    fCoolPct := LIMIT(0.0, fCoolCmdPct, 100.0);
+    fOffWindowS := MAX(1.0, TIME_TO_LREAL(stParams.tOffAccelerationWindow) / 1000.0);
+
+    IF NOT bInitialized THEN
+        fTemperaturePv := stParams.fProcessInitTempDegC;
+        fHeaterCoreTemp := stParams.fHeaterInitTempDegC;
+        fOffTimeS := 0.0;
+        bInitialized := TRUE;
+    END_IF;
+
+    IF fHeatPct > 0.01 THEN
+        fOffTimeS := 0.0;
+    ELSE
+        fOffTimeS := fOffTimeS + fCycleS;
+    END_IF;
+    fOffFactor := LIMIT(0.0, fOffTimeS / fOffWindowS, 1.0);
+
+    // Wirtualna temperatura rdzenia grzalki (bezwladnosc nagrzewania/chlodzenia elementu)
+    fHeaterTargetTemp := fAmbient + (stParams.fHeaterTargetRiseAt100DegC * (fHeatPct / 100.0));
+    fHeaterTauS := MAX(0.2, stParams.fHeaterWarmupTauS);
+    IF fHeatPct > 0.01 THEN
+        fHeaterCoreTemp := fHeaterCoreTemp + ((fHeaterTargetTemp - fHeaterCoreTemp) * (fCycleS / fHeaterTauS));
+    ELSE
+        fHeaterLossPerS := MAX(0.0, stParams.fHeaterLossBasePerS + (stParams.fHeaterLossOffBoostPerS * fOffFactor));
+        fHeaterCoreTemp := fHeaterCoreTemp - ((fHeaterCoreTemp - fAmbient) * fHeaterLossPerS * fCycleS);
+    END_IF;
+
+    // Zmienny krok narastania: najpierw wolno, potem szybciej gdy grzalka goraca
+    fHeaterHotFactor := LIMIT(0.0, (fHeaterCoreTemp - fAmbient) / MAX(0.1, stParams.fHeaterTargetRiseAt100DegC), 1.0);
+    fHeatTransferPerS := MAX(0.0, stParams.fHeatTransferBasePerS + (stParams.fHeatTransferHotBoostPerS * fHeaterHotFactor));
+    fHeatFlow := (fHeaterCoreTemp - fTemperaturePv) * fHeatTransferPerS;
+
+    // Chlodzenie przy OFF: im dluzej bez zasilania, tym szybszy spadek temperatury obiektu
+    fProcessLossPerS := MAX(0.0, stParams.fProcessLossBasePerS + (stParams.fProcessLossOffBoostPerS * fOffFactor));
+    fProcessAmbientLoss := (fTemperaturePv - fAmbient) * fProcessLossPerS;
+    fCoolerLoss := MAX(0.0, stParams.fCoolerGainDegCPerSAt100) * (fCoolPct / 100.0);
+
+    fTemperaturePv := fTemperaturePv + ((fHeatFlow - fProcessAmbientLoss - fCoolerLoss) * fCycleS);
+
+    // Ograniczenia bezpieczenstwa symulacji
+    fTemperaturePv := LIMIT(stParams.fProcessMinTemp, fTemperaturePv, stParams.fProcessMaxTemp);
+ELSE
+    // Reset bloku do stanu 0 gdy EN=FALSE
+    bInitialized := FALSE;
+    fTemperaturePv := 0.0;
+    fHeaterCoreTemp := 0.0;
+    fOffTimeS := 0.0;
+END_IF;
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
