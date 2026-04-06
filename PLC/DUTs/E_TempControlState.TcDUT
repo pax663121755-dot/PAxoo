@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="E_TempControlState" Id="{a1b2c3d4-0002-0002-0002-000000000002}">
+    <Declaration><![CDATA[
+{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE E_TempControlState :
+(
+    eIdle       := 0,
+    eHeating    := 1,
+    eCooling    := 2,
+    eAtSetpoint := 3,
+    eAutoTuning := 4,
+    eManual     := 5,
+    eError      := 99
+);
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

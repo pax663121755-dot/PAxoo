@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_TempControl_HMI" Id="{a1b2c3d4-0004-0004-0004-000000000004}">
+    <Declaration><![CDATA[
+TYPE ST_TempControl_HMI :
+STRUCT
+    (* ===== Commands from HMI ===== *)
+    bStart          : BOOL;             (* Start temperature control *)
+    bStop           : BOOL;             (* Stop temperature control *)
+    bReset          : BOOL;             (* Reset errors *)
+    bStartAutoTune  : BOOL;             (* Start auto-tuning *)
+    bStopAutoTune   : BOOL;             (* Stop auto-tuning *)
+    eRequestedMode  : E_TempControlMode; (* Requested operation mode *)
+    rSetpoint       : REAL;             (* Setpoint from HMI [°C] *)
+    rManualOutput   : REAL;             (* Manual output from HMI [%] *)
+
+    (* ===== Status to HMI ===== *)
+    rActualTemp     : REAL;             (* Current temperature [°C] *)
+    rPidOutput      : REAL;             (* Current PID output [%] *)
+    rAnalogOutput   : REAL;             (* Current analog output [%] *)
+    eActiveMode     : E_TempControlMode; (* Current mode *)
+    eState          : E_TempControlState; (* Current state *)
+    bHeating        : BOOL;             (* Heating output active *)
+    bCooling        : BOOL;             (* Cooling output active *)
+    bAtSetpoint     : BOOL;             (* Temperature at setpoint *)
+    bError          : BOOL;             (* Error active *)
+    bAutoTuneActive : BOOL;             (* Auto-tune in progress *)
+    bAutoTuneDone   : BOOL;             (* Auto-tune completed *)
+    nErrorId        : DINT;             (* Error code *)
+    sErrorMsg       : STRING(255);      (* Error description *)
+
+    (* ===== Tuned PID display ===== *)
+    rTunedKp        : REAL;             (* Last auto-tuned Kp *)
+    rTunedKi        : REAL;             (* Last auto-tuned Ki *)
+    rTunedKd        : REAL;             (* Last auto-tuned Kd *)
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

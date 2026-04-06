@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_TempControl_Duty" Id="{a1b2c3d4-0003-0003-0003-000000000003}">
+    <Declaration><![CDATA[
+TYPE ST_TempControl_Duty :
+STRUCT
+    (* ===== PID Parameters ===== *)
+    rKp             : REAL := 10.0;     (* Proportional gain *)
+    rKi             : REAL := 0.5;      (* Integral gain *)
+    rKd             : REAL := 1.0;      (* Derivative gain *)
+
+    (* ===== Setpoint & Limits ===== *)
+    rSetpoint       : REAL := 25.0;     (* Target temperature [°C] *)
+    rTempMin        : REAL := -20.0;    (* Minimum allowed temperature [°C] *)
+    rTempMax        : REAL := 200.0;    (* Maximum allowed temperature [°C] *)
+    rSetpointMin    : REAL := 0.0;      (* Minimum setpoint [°C] *)
+    rSetpointMax    : REAL := 150.0;    (* Maximum setpoint [°C] *)
+
+    (* ===== Output Limits ===== *)
+    rOutputMin      : REAL := 0.0;      (* PID output minimum [%] *)
+    rOutputMax      : REAL := 100.0;    (* PID output maximum [%] *)
+
+    (* ===== Hysteresis & Deadband ===== *)
+    rHysteresis     : REAL := 1.0;      (* Hysteresis for digital outputs [°C] *)
+    rDeadband       : REAL := 0.5;      (* Deadband around setpoint [°C] *)
+
+    (* ===== Heating & Cooling Thresholds ===== *)
+    rHeatingThreshold : REAL := 5.0;    (* PID output % above which heating is ON *)
+    rCoolingThreshold : REAL := -5.0;   (* PID output % below which cooling is ON *)
+
+    (* ===== Manual Output ===== *)
+    rManualOutput   : REAL := 0.0;      (* Manual output value [%] *)
+
+    (* ===== Filter ===== *)
+    rFilterTime     : REAL := 0.5;      (* PT1 filter time for temperature sensor [s] *)
+
+    (* ===== Cycle Time ===== *)
+    tCycleTime      : TIME := T#100MS;  (* PLC cycle time for PID calculation *)
+
+    (* ===== AutoTune Config ===== *)
+    rAutoTuneStep   : REAL := 30.0;     (* Step output for relay auto-tune [%] *)
+    rAutoTuneHyst   : REAL := 2.0;      (* Hysteresis for auto-tune relay [°C] *)
+    nAutoTuneOscCount : INT := 4;       (* Number of oscillations for auto-tune *)
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

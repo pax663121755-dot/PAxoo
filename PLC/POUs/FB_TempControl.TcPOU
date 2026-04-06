@@ -1,0 +1,391 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_TempControl" Id="{a1b2c3d4-0010-0010-0010-000000000010}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_TempControl
+(* ============================================================================
+   FB_TempControl - Temperature Control Function Block
+   
+   Features:
+     - PID regulation with anti-windup
+     - Heating and cooling digital outputs with hysteresis
+     - Analog output for modulating control (0-100%)
+     - Relay-feedback auto-tuning (Åström-Hägglund / Ziegler-Nichols)
+     - PT1 input filter
+     - HMI-ready interface via ST_TempControl_HMI
+     
+   Structure: IF ENO THEN <logic> ELSE <reset> END_IF; <TON calls>; ENO:=EN;
+   ============================================================================ *)
+
+VAR_INPUT
+    EN              : BOOL;             (* Enable block *)
+    rActualTemp_Raw : REAL;             (* Raw temperature measurement [°C] *)
+END_VAR
+
+VAR_OUTPUT
+    ENO             : BOOL;             (* Enable out *)
+    bHeating        : BOOL;             (* Digital output: heating ON *)
+    bCooling        : BOOL;             (* Digital output: cooling ON *)
+    rAnalogOutput   : REAL;             (* Analog output for temperature control [%] *)
+    eState          : E_TempControlState;
+    eActiveMode     : E_TempControlMode;
+    bError          : BOOL;
+    nErrorId        : DINT;
+    sErrorMsg       : STRING(255);
+    bAtSetpoint     : BOOL;
+    bAutoTuneDone   : BOOL;
+END_VAR
+
+VAR_IN_OUT
+    stDuty          : ST_TempControl_Duty;
+    stHMI           : ST_TempControl_HMI;
+END_VAR
+
+VAR
+    (* PID internals *)
+    _rError         : REAL;
+    _rErrorPrev     : REAL;
+    _rIntegral      : REAL;
+    _rDerivative    : REAL;
+    _rPidOut        : REAL;
+    _rFilteredTemp  : REAL;
+    _bFirstRun      : BOOL := TRUE;
+
+    (* Mode state *)
+    _eMode          : E_TempControlMode;
+
+    (* Auto-tune internals *)
+    _bATRunning     : BOOL;
+    _bATDone        : BOOL;
+    _rATOutput      : REAL;
+    _nATOscCount    : INT;
+    _nATHalfCount   : INT;
+    _rATPeakHigh    : REAL;
+    _rATPeakLow     : REAL;
+    _rATPeakHighSum : REAL;
+    _rATPeakLowSum  : REAL;
+    _rATPeriodSum   : REAL;
+    _bATAbove       : BOOL;
+    _bATPrevAbove   : BOOL;
+    _rATTimeAcc     : REAL;
+    _rATLastCross   : REAL;
+    _rATAmplitude   : REAL;
+    _rATPeriod      : REAL;
+    _rATKu          : REAL;
+
+    (* Timing *)
+    _rDt            : REAL;
+
+    (* At-setpoint timer *)
+    _tonAtSetpoint  : TON;
+    _bInDeadband    : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+(* === Cycle time in seconds === *)
+_rDt := TIME_TO_REAL(stDuty.tCycleTime) / 1000.0;
+IF _rDt <= 0.0 THEN
+    _rDt := 0.1;
+END_IF
+
+IF ENO THEN
+
+    (* ==================== HMI Command Processing ==================== *)
+    IF stHMI.bReset THEN
+        nErrorId := 0;
+        sErrorMsg := '';
+        bError := FALSE;
+        IF _eMode = E_TempControlMode.eError THEN
+            _eMode := E_TempControlMode.eIdle;
+        END_IF;
+        stHMI.bReset := FALSE;
+    END_IF;
+
+    IF stHMI.bStop THEN
+        _eMode := E_TempControlMode.eIdle;
+        _bATRunning := FALSE;
+        stHMI.bStop := FALSE;
+    ELSIF stHMI.bStartAutoTune AND _eMode <> E_TempControlMode.eError THEN
+        _eMode := E_TempControlMode.eAutoTune;
+        _bATRunning := FALSE;
+        stHMI.bStartAutoTune := FALSE;
+    ELSIF stHMI.bStopAutoTune THEN
+        IF _eMode = E_TempControlMode.eAutoTune THEN
+            _eMode := E_TempControlMode.eIdle;
+        END_IF;
+        _bATRunning := FALSE;
+        stHMI.bStopAutoTune := FALSE;
+    ELSIF stHMI.bStart AND _eMode <> E_TempControlMode.eError THEN
+        _eMode := stHMI.eRequestedMode;
+        IF _eMode = E_TempControlMode.eIdle THEN
+            _eMode := E_TempControlMode.eAuto;
+        END_IF;
+        stHMI.bStart := FALSE;
+    END_IF;
+
+    IF stHMI.rSetpoint >= stDuty.rSetpointMin AND stHMI.rSetpoint <= stDuty.rSetpointMax THEN
+        stDuty.rSetpoint := stHMI.rSetpoint;
+    END_IF;
+    IF _eMode = E_TempControlMode.eManual THEN
+        stDuty.rManualOutput := stHMI.rManualOutput;
+    END_IF;
+
+    (* ==================== Temperature Filter (PT1) ==================== *)
+    IF _bFirstRun THEN
+        _rFilteredTemp := rActualTemp_Raw;
+        _bFirstRun := FALSE;
+    ELSIF stDuty.rFilterTime > 0.0 THEN
+        _rFilteredTemp := _rFilteredTemp
+            + (_rDt / stDuty.rFilterTime) * (rActualTemp_Raw - _rFilteredTemp);
+    ELSE
+        _rFilteredTemp := rActualTemp_Raw;
+    END_IF;
+
+    (* ==================== Input Validation ==================== *)
+    IF _rFilteredTemp < stDuty.rTempMin OR _rFilteredTemp > stDuty.rTempMax THEN
+        nErrorId := 1;
+        sErrorMsg := 'Temperature out of sensor range';
+        bError := TRUE;
+        _eMode := E_TempControlMode.eError;
+    END_IF;
+
+    IF stDuty.rSetpoint < stDuty.rSetpointMin OR stDuty.rSetpoint > stDuty.rSetpointMax THEN
+        nErrorId := 2;
+        sErrorMsg := 'Setpoint out of allowed range';
+        bError := TRUE;
+        _eMode := E_TempControlMode.eError;
+    END_IF;
+
+    (* ==================== Mode Execution ==================== *)
+    CASE _eMode OF
+
+    E_TempControlMode.eIdle:
+        eState := E_TempControlState.eIdle;
+        _rPidOut := 0.0;
+        _rIntegral := 0.0;
+        _rErrorPrev := 0.0;
+        bHeating := FALSE;
+        bCooling := FALSE;
+        rAnalogOutput := 0.0;
+        bAtSetpoint := FALSE;
+
+    E_TempControlMode.eAuto:
+        _rError := stDuty.rSetpoint - _rFilteredTemp;
+
+        (* Proportional term *)
+        _rPidOut := stDuty.rKp * _rError;
+
+        (* Integral with anti-windup *)
+        _rIntegral := _rIntegral + stDuty.rKi * _rError * _rDt;
+        IF _rIntegral > stDuty.rOutputMax THEN
+            _rIntegral := stDuty.rOutputMax;
+        ELSIF _rIntegral < stDuty.rOutputMin THEN
+            _rIntegral := stDuty.rOutputMin;
+        END_IF;
+
+        (* Derivative term *)
+        IF _rDt > 0.0 THEN
+            _rDerivative := stDuty.rKd * (_rError - _rErrorPrev) / _rDt;
+        ELSE
+            _rDerivative := 0.0;
+        END_IF;
+        _rErrorPrev := _rError;
+
+        (* PID sum + output clamping *)
+        _rPidOut := _rPidOut + _rIntegral + _rDerivative;
+        IF _rPidOut > stDuty.rOutputMax THEN
+            _rPidOut := stDuty.rOutputMax;
+        ELSIF _rPidOut < stDuty.rOutputMin THEN
+            _rPidOut := stDuty.rOutputMin;
+        END_IF;
+
+        rAnalogOutput := _rPidOut;
+
+        (* Digital outputs with hysteresis *)
+        IF _rError > stDuty.rHysteresis THEN
+            bHeating := TRUE;
+        ELSIF _rError < stDuty.rDeadband THEN
+            bHeating := FALSE;
+        END_IF;
+
+        IF _rError < -stDuty.rHysteresis THEN
+            bCooling := TRUE;
+        ELSIF _rError > -stDuty.rDeadband THEN
+            bCooling := FALSE;
+        END_IF;
+
+        (* State determination *)
+        IF bHeating THEN
+            eState := E_TempControlState.eHeating;
+        ELSIF bCooling THEN
+            eState := E_TempControlState.eCooling;
+        ELSE
+            eState := E_TempControlState.eAtSetpoint;
+        END_IF;
+
+        bAtSetpoint := ABS(_rError) <= stDuty.rDeadband;
+
+    E_TempControlMode.eManual:
+        eState := E_TempControlState.eManual;
+        _rPidOut := stDuty.rManualOutput;
+        rAnalogOutput := _rPidOut;
+        _rIntegral := 0.0;
+        _rErrorPrev := 0.0;
+        bHeating := _rPidOut > stDuty.rHeatingThreshold;
+        bCooling := _rPidOut < stDuty.rCoolingThreshold;
+        bAtSetpoint := FALSE;
+
+    E_TempControlMode.eAutoTune:
+        eState := E_TempControlState.eAutoTuning;
+        _rError := stDuty.rSetpoint - _rFilteredTemp;
+
+        IF NOT _bATRunning THEN
+            _bATRunning := TRUE;
+            _bATDone := FALSE;
+            _nATOscCount := 0;
+            _nATHalfCount := 0;
+            _rATPeakHighSum := 0.0;
+            _rATPeakLowSum := 0.0;
+            _rATPeriodSum := 0.0;
+            _rATPeakHigh := _rFilteredTemp;
+            _rATPeakLow := _rFilteredTemp;
+            _bATAbove := _rFilteredTemp > stDuty.rSetpoint;
+            _bATPrevAbove := _bATAbove;
+            _rATTimeAcc := 0.0;
+            _rATLastCross := 0.0;
+        END_IF;
+
+        (* Relay output *)
+        IF _rError > stDuty.rAutoTuneHyst THEN
+            _rATOutput := stDuty.rAutoTuneStep;
+        ELSIF _rError < -stDuty.rAutoTuneHyst THEN
+            _rATOutput := 0.0;
+        END_IF;
+
+        rAnalogOutput := _rATOutput;
+        bHeating := _rATOutput > 0.0;
+        bCooling := NOT bHeating AND _bATRunning;
+
+        _rATTimeAcc := _rATTimeAcc + _rDt;
+        _bATAbove := _rFilteredTemp > stDuty.rSetpoint;
+
+        (* Track oscillation peaks *)
+        IF _bATAbove AND _rFilteredTemp > _rATPeakHigh THEN
+            _rATPeakHigh := _rFilteredTemp;
+        END_IF;
+        IF NOT _bATAbove AND _rFilteredTemp < _rATPeakLow THEN
+            _rATPeakLow := _rFilteredTemp;
+        END_IF;
+
+        (* Detect setpoint crossing *)
+        IF _bATAbove <> _bATPrevAbove THEN
+            _nATHalfCount := _nATHalfCount + 1;
+
+            IF (_nATHalfCount MOD 2) = 0 AND _nATHalfCount >= 2 THEN
+                _nATOscCount := _nATOscCount + 1;
+                _rATPeakHighSum := _rATPeakHighSum + _rATPeakHigh;
+                _rATPeakLowSum := _rATPeakLowSum + _rATPeakLow;
+
+                IF _nATOscCount > 1 THEN
+                    _rATPeriodSum := _rATPeriodSum + (_rATTimeAcc - _rATLastCross);
+                END_IF;
+                _rATLastCross := _rATTimeAcc;
+                _rATPeakHigh := _rFilteredTemp;
+                _rATPeakLow := _rFilteredTemp;
+            END_IF;
+
+            _bATPrevAbove := _bATAbove;
+        END_IF;
+
+        (* Calculate PID when enough oscillations collected *)
+        IF _nATOscCount >= stDuty.nAutoTuneOscCount AND _nATOscCount > 1 AND NOT _bATDone THEN
+            _rATAmplitude := (_rATPeakHighSum - _rATPeakLowSum)
+                             / INT_TO_REAL(_nATOscCount) / 2.0;
+            _rATPeriod := _rATPeriodSum / INT_TO_REAL(_nATOscCount - 1);
+
+            IF _rATAmplitude > 0.001 AND _rATPeriod > 0.001 THEN
+                _rATKu := (4.0 * stDuty.rAutoTuneStep) / (3.14159 * _rATAmplitude);
+                stDuty.rKp := 0.6 * _rATKu;
+                stDuty.rKi := 1.2 * _rATKu / _rATPeriod;
+                stDuty.rKd := 0.075 * _rATKu * _rATPeriod;
+            END_IF;
+
+            _bATDone := TRUE;
+            _bATRunning := FALSE;
+            bAutoTuneDone := TRUE;
+            _eMode := E_TempControlMode.eAuto;
+            _rIntegral := 0.0;
+            _rErrorPrev := 0.0;
+        END_IF;
+
+        bAtSetpoint := FALSE;
+
+    E_TempControlMode.eError:
+        eState := E_TempControlState.eError;
+        _rPidOut := 0.0;
+        rAnalogOutput := 0.0;
+        bHeating := FALSE;
+        bCooling := FALSE;
+        bAtSetpoint := FALSE;
+
+    END_CASE;
+
+    eActiveMode := _eMode;
+
+    (* ==================== Update HMI Status ==================== *)
+    stHMI.rActualTemp       := _rFilteredTemp;
+    stHMI.rPidOutput        := _rPidOut;
+    stHMI.rAnalogOutput     := rAnalogOutput;
+    stHMI.eActiveMode       := _eMode;
+    stHMI.eState            := eState;
+    stHMI.bHeating          := bHeating;
+    stHMI.bCooling          := bCooling;
+    stHMI.bAtSetpoint       := bAtSetpoint;
+    stHMI.bError            := bError;
+    stHMI.bAutoTuneActive   := _bATRunning;
+    stHMI.bAutoTuneDone     := _bATDone;
+    stHMI.nErrorId          := nErrorId;
+    stHMI.sErrorMsg         := sErrorMsg;
+    stHMI.rTunedKp          := stDuty.rKp;
+    stHMI.rTunedKi          := stDuty.rKi;
+    stHMI.rTunedKd          := stDuty.rKd;
+
+ELSE
+    (* ==================== Reset Block to 0 State ==================== *)
+    _eMode := E_TempControlMode.eIdle;
+    eState := E_TempControlState.eIdle;
+    eActiveMode := E_TempControlMode.eIdle;
+    _rPidOut := 0.0;
+    _rIntegral := 0.0;
+    _rErrorPrev := 0.0;
+    _rError := 0.0;
+    _rDerivative := 0.0;
+    _rFilteredTemp := 0.0;
+    _bFirstRun := TRUE;
+    rAnalogOutput := 0.0;
+    bHeating := FALSE;
+    bCooling := FALSE;
+    bAtSetpoint := FALSE;
+    bAutoTuneDone := FALSE;
+    bError := FALSE;
+    nErrorId := 0;
+    sErrorMsg := '';
+    _bATRunning := FALSE;
+    _bATDone := FALSE;
+    _rATOutput := 0.0;
+    _nATOscCount := 0;
+    _nATHalfCount := 0;
+    _bInDeadband := FALSE;
+
+END_IF;
+
+(* ==================== External FB Calls ==================== *)
+_bInDeadband := ABS(stDuty.rSetpoint - _rFilteredTemp) <= stDuty.rDeadband;
+_tonAtSetpoint(IN := _bInDeadband, PT := T#2S);
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
