@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_TemperatureControl" Id="{a1b2c3d4-0002-0001-0001-000000000002}" SpecialFunc="None">
+    <Declaration><![CDATA[
+(*
+  FB_TemperatureControl
+  ─────────────────────────────────────────────────────────────────────────────
+  TwinCAT 3 function block for closed-loop temperature control.
+
+  Features
+  ────────
+  • ISA-standard PID with anti-windup (back-calculation) and bumpless transfer
+  • Separate heating (bHeat) and cooling (bCool) digital outputs
+  • Scaled analog output (rAnalogOut) for servo-valve / thyristor drives
+  • Relay-feedback autotune (Åström–Hägglund) accessible from HMI
+  • All tunable parameters exposed via stParams (VAR_IN_OUT) for easy HMI mapping
+  • Alarm outputs for sensor fault, high/low limit breach, autotune error
+
+  Wiring convention
+  ─────────────────
+  rAnalogOut > 0 → heating  (mapped to rAnalogOutMin … rAnalogOutMax)
+  rAnalogOut < 0 → cooling  (mapped to rAnalogOutMax … rAnalogOutMin, inverted)
+  bHeat and bCool are asserted when the respective mode is active AND |output| > deadband
+*)
+FUNCTION_BLOCK FB_TemperatureControl
+VAR_INPUT
+    EN              : BOOL;                 (* Block enable (EN/ENO pattern)         *)
+    rProcessValue   : REAL;                 (* Measured temperature [°C]             *)
+    tCycleTime      : TIME := T#10MS;       (* PLC task cycle time                   *)
+END_VAR
+VAR_IN_OUT
+    stParams        : DUT_TemperatureControlParams; (* All tunable parameters        *)
+END_VAR
+VAR_OUTPUT
+    ENO             : BOOL;
+
+    (* Analog output *)
+    rAnalogOut      : REAL;                 (* Scaled physical signal [rAnalogOutMin…rAnalogOutMax] *)
+    rPidOut         : REAL;                 (* Raw PID output [-100 … +100 %]        *)
+
+    (* Digital outputs *)
+    bHeat           : BOOL;                 (* TRUE → activate heater                *)
+    bCool           : BOOL;                 (* TRUE → activate cooler                *)
+
+    (* Status / diagnostics *)
+    rError          : REAL;                 (* Control error = setpoint − PV [°C]   *)
+    bAlarmHigh      : BOOL;                 (* PV above rLimitHigh                   *)
+    bAlarmLow       : BOOL;                 (* PV below rLimitLow                    *)
+    bAutotuneActive : BOOL;                 (* Autotune in progress                  *)
+    bAutotuneDone   : BOOL;                 (* Pulsed one cycle on completion        *)
+    bAutotuneError  : BOOL;                 (* Autotune failed                       *)
+    eAutotuneState  : E_AutotuneState;      (* For HMI display                       *)
+END_VAR
+VAR
+    (* PID internal state *)
+    rIntegral       : REAL;
+    rDerivPrev      : REAL;
+    rPvPrev         : REAL;
+    rOutPrev        : REAL;
+    rDt             : REAL;
+
+    (* Autotune FB *)
+    fbAutotune      : FB_Autotune;
+    bAtunePrev      : BOOL;     (* For rising-edge detection of bAutotuneRequest *)
+    bAtuneRunning   : BOOL;
+
+    (* Bumpless transfer helpers *)
+    bAutoModePrev   : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF NOT EN THEN
+    (* ── Reset all outputs ────────────────────────────────────────────── *)
+    rPidOut         := 0.0;
+    rAnalogOut      := stParams.rAnalogOutMin;
+    bHeat           := FALSE;
+    bCool           := FALSE;
+    rError          := 0.0;
+    bAlarmHigh      := FALSE;
+    bAlarmLow       := FALSE;
+    bAutotuneActive := FALSE;
+    bAutotuneDone   := FALSE;
+    bAutotuneError  := FALSE;
+    rIntegral       := 0.0;
+    rDerivPrev      := 0.0;
+    rPvPrev         := rProcessValue;
+    rOutPrev        := 0.0;
+    bAtuneRunning   := FALSE;
+
+    (* Run autotune FB with EN=FALSE to keep it reset *)
+    fbAutotune(EN := FALSE,
+               rProcessValue   := rProcessValue,
+               rSetpoint       := stParams.rSetpoint,
+               rRelayAmplitude := stParams.rAutotuneRelay,
+               rNoiseBand      := stParams.rAutotuneNoise,
+               nCycles         := stParams.nAutotuneCycles);
+
+    ENO := FALSE;
+    RETURN;
+END_IF
+
+(* ── Cycle time in seconds ─────────────────────────────────────────────── *)
+rDt := TIME_TO_REAL(tCycleTime) / 1000.0;
+IF rDt <= 0.0 THEN rDt := 0.01; END_IF
+
+(* ── Alarm evaluation ──────────────────────────────────────────────────── *)
+bAlarmHigh := rProcessValue > stParams.rLimitHigh;
+bAlarmLow  := rProcessValue < stParams.rLimitLow;
+
+(* ── Autotune management ───────────────────────────────────────────────── *)
+(* Rising edge on bAutotuneRequest starts autotune *)
+IF stParams.bAutotuneRequest AND NOT bAtunePrev THEN
+    bAtuneRunning             := TRUE;
+    stParams.bAutotuneRequest := FALSE;   (* Self-clear for HMI *)
+END_IF
+bAtunePrev := stParams.bAutotuneRequest;
+
+IF bAtuneRunning THEN
+    fbAutotune(EN               := TRUE,
+               rProcessValue    := rProcessValue,
+               rSetpoint        := stParams.rSetpoint,
+               rRelayAmplitude  := stParams.rAutotuneRelay,
+               rNoiseBand       := stParams.rAutotuneNoise,
+               nCycles          := stParams.nAutotuneCycles);
+
+    bAutotuneActive := TRUE;
+    eAutotuneState  := fbAutotune.eState;
+    bAutotuneError  := fbAutotune.bError;
+
+    IF fbAutotune.bDone THEN
+        (* Write back computed parameters *)
+        stParams.rKp    := fbAutotune.rKp_new;
+        stParams.rTi    := fbAutotune.rTi_new;
+        stParams.rTd    := fbAutotune.rTd_new;
+        bAutotuneDone   := TRUE;
+        bAtuneRunning   := FALSE;
+        (* Reset integrator to avoid bump *)
+        rIntegral       := 0.0;
+    ELSIF fbAutotune.bError THEN
+        bAtuneRunning   := FALSE;
+    END_IF
+
+    (* During autotune, drive plant with relay output *)
+    rPidOut := LIMIT(stParams.rOutMin, fbAutotune.rRelayOut, stParams.rOutMax);
+ELSE
+    (* ── Idle autotune FB ──────────────────────────────────────────────── *)
+    fbAutotune(EN := FALSE,
+               rProcessValue   := rProcessValue,
+               rSetpoint       := stParams.rSetpoint,
+               rRelayAmplitude := stParams.rAutotuneRelay,
+               rNoiseBand      := stParams.rAutotuneNoise,
+               nCycles         := stParams.nAutotuneCycles);
+
+    bAutotuneActive := FALSE;
+    bAutotuneDone   := FALSE;
+
+    (* ── PID / Manual control ──────────────────────────────────────────── *)
+    IF stParams.bAutoMode THEN
+        (* Bumpless transfer from manual to auto: pre-load integrator *)
+        IF NOT bAutoModePrev THEN
+            rIntegral  := stParams.rManualOut;
+            rDerivPrev := 0.0;
+        END_IF
+
+        rError := stParams.rSetpoint - rProcessValue;
+
+        (* Derivative on PV to avoid derivative kick on setpoint steps *)
+        VAR_TEMP
+            rDeriv      : REAL;
+            rDerivRaw   : REAL;
+            rTf         : REAL;
+            rKi         : REAL;
+            rPidRaw     : REAL;
+            rBackCalc   : REAL;
+        END_VAR
+
+        rTf := stParams.rTf;
+        IF rTf <= 0.0 THEN rTf := 0.001; END_IF
+
+        (* Filtered derivative of PV (derivative-on-measurement) *)
+        rDerivRaw  := -(rProcessValue - rPvPrev) / rDt;
+        rDeriv     := rDerivPrev + (rDt / rTf) * (rDerivRaw - rDerivPrev);
+        rDerivPrev := rDeriv;
+        rPvPrev    := rProcessValue;
+
+        (* Integral with conditional anti-windup (back-calculation) *)
+        rKi := IF_THEN_ELSE(stParams.rTi > 0.0, 1.0 / stParams.rTi, 0.0);
+
+        rPidRaw := stParams.rKp * (rError + rKi * rIntegral * rDt +
+                                   stParams.rTd * rDeriv);
+
+        (* Clamp and back-calculate for anti-windup *)
+        rPidOut  := LIMIT(stParams.rOutMin, rPidRaw, stParams.rOutMax);
+        rBackCalc := (rPidOut - rPidRaw);   (* = 0 when not clamped *)
+        rIntegral := rIntegral + rError + rBackCalc / (stParams.rKp + 0.0001);
+    ELSE
+        (* Manual mode *)
+        rError    := stParams.rSetpoint - rProcessValue;
+        rPidOut   := LIMIT(stParams.rOutMin, stParams.rManualOut, stParams.rOutMax);
+        (* Track integrator for bumpless auto return *)
+        rIntegral := rPidOut;
+        rDerivPrev := 0.0;
+        rPvPrev    := rProcessValue;
+    END_IF
+END_IF
+
+bAutoModePrev := stParams.bAutoMode;
+
+(* ── Digital outputs: Heat / Cool ─────────────────────────────────────── *)
+bHeat := stParams.bHeatEnable AND (rPidOut >  stParams.rDeadband);
+bCool := stParams.bCoolEnable AND (rPidOut < -stParams.rDeadband);
+
+(* ── Analog output scaling ─────────────────────────────────────────────── *)
+(*  rPidOut ∈ [rOutMin…rOutMax] → rAnalogOut ∈ [rAnalogOutMin…rAnalogOutMax]
+    Positive output (heat) and negative output (cool) both map to the
+    physical analog range; the sign distinguishes direction.
+    Simple linear map: out_phys = OutMin + (pid% - PidMin)/(PidMax-PidMin)*(OutMax-OutMin)  *)
+VAR_TEMP
+    rPidRange   : REAL;
+    rOutRange   : REAL;
+END_VAR
+rPidRange  := stParams.rOutMax - stParams.rOutMin;
+rOutRange  := stParams.rAnalogOutMax - stParams.rAnalogOutMin;
+IF ABS(rPidRange) > 0.0 THEN
+    rAnalogOut := stParams.rAnalogOutMin +
+                  ((rPidOut - stParams.rOutMin) / rPidRange) * rOutRange;
+ELSE
+    rAnalogOut := stParams.rAnalogOutMin;
+END_IF
+rAnalogOut := LIMIT(stParams.rAnalogOutMin, rAnalogOut, stParams.rAnalogOutMax);
+
+rOutPrev := rPidOut;
+ENO      := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

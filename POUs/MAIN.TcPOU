@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{a1b2c3d4-0003-0001-0001-000000000001}" SpecialFunc="None">
+    <Declaration><![CDATA[
+(*
+  MAIN – Example program wiring FB_TemperatureControl to physical I/O.
+
+  HMI access:
+    Link all members of stTempParams directly to HMI controls/displays.
+    Link bHeat, bCool, rAnalogOut, rError, bAlarmHigh, bAlarmLow,
+    bAutotuneActive, bAutotuneDone, eAutotuneState to HMI read-only widgets.
+
+  I/O mapping:
+    rTemperaturePV  ← AI channel (PT100 / thermocouple module scaled to °C)
+    rHeaterAO       → AO channel (0-10 V / 4-20 mA thyristor controller)
+    bHeaterDO       → DO relay (heater contactor)
+    bCoolerDO       → DO relay (cooler valve / fan)
+*)
+PROGRAM MAIN
+VAR
+    (* Physical I/O – map these to hardware I/O variables in TwinCAT *)
+    rTemperaturePV  : REAL;         (* FROM: analog input module [°C]        *)
+    rHeaterAO       : REAL;         (* TO:   analog output module             *)
+    bHeaterDO       : BOOL;         (* TO:   digital output – heater relay    *)
+    bCoolerDO       : BOOL;         (* TO:   digital output – cooler relay    *)
+
+    (* Control block instance *)
+    fbTempCtrl      : FB_TemperatureControl;
+
+    (* Parameters – exposed to HMI as a single structured variable *)
+    stTempParams    : DUT_TemperatureControlParams := (
+        rSetpoint        := 60.0,
+        rDeadband        := 0.3,
+        rLimitHigh       := 90.0,
+        rLimitLow        := 10.0,
+        rKp              := 2.0,
+        rTi              := 30.0,
+        rTd              := 2.0,
+        rTf              := 1.0,
+        rOutMax          := 100.0,
+        rOutMin          := -100.0,
+        rAnalogOutMax    := 10.0,
+        rAnalogOutMin    := 0.0,
+        bAutoMode        := TRUE,
+        rManualOut       := 0.0,
+        bHeatEnable      := TRUE,
+        bCoolEnable      := TRUE,
+        bAutotuneRequest := FALSE,
+        rAutotuneRelay   := 10.0,
+        rAutotuneNoise   := 0.2,
+        nAutotuneCycles  := 3
+    );
+
+    (* HMI status read-backs *)
+    rPidOut         : REAL;
+    rControlError   : REAL;
+    bAlarmHigh      : BOOL;
+    bAlarmLow       : BOOL;
+    bAutotuneActive : BOOL;
+    bAutotuneDone   : BOOL;
+    bAutotuneError  : BOOL;
+    eAutotuneState  : E_AutotuneState;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+(* ── Call the temperature control block ─────────────────────────────────── *)
+fbTempCtrl(
+    EN             := TRUE,
+    rProcessValue  := rTemperaturePV,
+    tCycleTime     := T#10MS,       (* Match to actual task cycle time        *)
+    stParams       := stTempParams
+);
+
+(* ── Map outputs to physical I/O ─────────────────────────────────────────── *)
+rHeaterAO  := fbTempCtrl.rAnalogOut;
+bHeaterDO  := fbTempCtrl.bHeat;
+bCoolerDO  := fbTempCtrl.bCool;
+
+(* ── Mirror status to HMI read-only variables ────────────────────────────── *)
+rPidOut         := fbTempCtrl.rPidOut;
+rControlError   := fbTempCtrl.rError;
+bAlarmHigh      := fbTempCtrl.bAlarmHigh;
+bAlarmLow       := fbTempCtrl.bAlarmLow;
+bAutotuneActive := fbTempCtrl.bAutotuneActive;
+bAutotuneDone   := fbTempCtrl.bAutotuneDone;
+bAutotuneError  := fbTempCtrl.bAutotuneError;
+eAutotuneState  := fbTempCtrl.eAutotuneState;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

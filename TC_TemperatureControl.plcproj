@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectGuid>{A1B2C3D4-0000-0000-0000-000000000001}</ProjectGuid>
+    <ProductVersion>3.1.4024.12</ProductVersion>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectType>PLC</ProjectType>
+    <DefaultNamespace>TC_TemperatureControl</DefaultNamespace>
+    <SupportedTargetNetIDs>
+    </SupportedTargetNetIDs>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Data types -->
+    <Compile Include="DUTs\DUT_TemperatureControlParams.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="DUTs\E_AutotuneState.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
+    <!-- Function Blocks -->
+    <Compile Include="POUs\FB_Autotune.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="POUs\FB_TemperatureControl.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <!-- Example program -->
+    <Compile Include="POUs\MAIN.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
+  <Import Project="$(TcVersion)\TcPlcProj.targets" Condition="Exists('$(TcVersion)\TcPlcProj.targets')" />
+</Project>

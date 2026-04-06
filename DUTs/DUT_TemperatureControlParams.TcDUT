@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <DUT Name="DUT_TemperatureControlParams" Id="{a1b2c3d4-0001-0001-0001-000000000001}">
+    <Declaration><![CDATA[
+{attribute 'qualified_only'}
+TYPE DUT_TemperatureControlParams :
+STRUCT
+    (* ── Setpoint & limits ─────────────────────────────────────────── *)
+    rSetpoint       : REAL := 25.0;     (* Desired temperature [°C]           *)
+    rDeadband       : REAL := 0.2;      (* Hysteresis / deadband [°C]         *)
+    rLimitHigh      : REAL := 80.0;     (* Max allowed temperature [°C]       *)
+    rLimitLow       : REAL := 0.0;      (* Min allowed temperature [°C]       *)
+
+    (* ── PID tuning parameters ──────────────────────────────────────── *)
+    rKp             : REAL := 1.0;      (* Proportional gain                  *)
+    rTi             : REAL := 20.0;     (* Integral time [s]  (0 = off)       *)
+    rTd             : REAL := 0.0;      (* Derivative time [s]                *)
+    rTf             : REAL := 0.5;      (* Derivative filter time const [s]   *)
+
+    (* ── Output limits ──────────────────────────────────────────────── *)
+    rOutMax         : REAL := 100.0;    (* Max analog output [%]              *)
+    rOutMin         : REAL := -100.0;   (* Min analog output [%] (<0 = cool)  *)
+    rAnalogOutMax   : REAL := 10.0;     (* Analog signal max [V / mA scale]   *)
+    rAnalogOutMin   : REAL := 0.0;      (* Analog signal min [V / mA scale]   *)
+
+    (* ── Mode ───────────────────────────────────────────────────────── *)
+    bAutoMode       : BOOL := TRUE;     (* TRUE = Auto (PID), FALSE = Manual  *)
+    rManualOut      : REAL := 0.0;      (* Manual output value [%]            *)
+    bHeatEnable     : BOOL := TRUE;     (* Enable heating output              *)
+    bCoolEnable     : BOOL := TRUE;     (* Enable cooling output              *)
+
+    (* ── Autotune ───────────────────────────────────────────────────── *)
+    bAutotuneRequest : BOOL := FALSE;   (* Rising-edge triggers autotune      *)
+    rAutotuneRelay   : REAL := 5.0;     (* Relay amplitude for autotune [%]   *)
+    rAutotuneNoise   : REAL := 0.1;     (* Noise band for relay switch [°C]   *)
+    nAutotuneCycles  : UINT := 3;       (* Oscillation cycles to average      *)
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

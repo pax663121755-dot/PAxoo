@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_Autotune" Id="{a1b2c3d4-0002-0001-0001-000000000001}" SpecialFunc="None">
+    <Declaration><![CDATA[
+(*
+  FB_Autotune
+  ───────────────────────────────────────────────────────────────────────────
+  Relay-feedback autotuner (Åström–Hägglund method).
+  Drives the process with a relay of amplitude ±rRelayAmplitude around the
+  setpoint and measures the resulting limit cycle.  After nCycles complete
+  oscillations it calculates the ultimate gain (Ku) and ultimate period (Tu)
+  and derives PID parameters via Ziegler–Nichols.
+
+  Caller (FB_TemperatureControl) passes IN_OUT stParams so that the
+  freshly-computed Kp / Ti / Td are written back automatically when DONE.
+*)
+FUNCTION_BLOCK FB_Autotune
+VAR_INPUT
+    EN              : BOOL;                 (* Block enable                          *)
+    rProcessValue   : REAL;                 (* Current temperature [°C]              *)
+    rSetpoint       : REAL;                 (* Target temperature [°C]               *)
+    rRelayAmplitude : REAL := 5.0;          (* Relay step size [%]                   *)
+    rNoiseBand      : REAL := 0.1;          (* Hysteresis to avoid chattering [°C]   *)
+    nCycles         : UINT := 3;            (* Oscillation cycles to average over    *)
+    tTimeout        : TIME := T#10M;        (* Max time to complete autotune         *)
+END_VAR
+VAR_OUTPUT
+    ENO             : BOOL;
+    bDone           : BOOL;                 (* Pulsed TRUE for one cycle when done   *)
+    bError          : BOOL;
+    eState          : E_AutotuneState;
+    rKp_new         : REAL;                 (* Suggested Kp (PID)                    *)
+    rTi_new         : REAL;                 (* Suggested Ti (PID) [s]                *)
+    rTd_new         : REAL;                 (* Suggested Td (PID) [s]                *)
+    rRelayOut       : REAL;                 (* Relay output [%] – fed to plant       *)
+END_VAR
+VAR
+    (* State machine *)
+    eStatePrev      : E_AutotuneState;
+    tStart          : TIME;
+
+    (* Oscillation measurement *)
+    nCycleCount     : UINT;
+    rSumPeriod      : REAL;
+    rSumAmplitude   : REAL;
+    rLastCrossTime  : REAL;         (* [ms] timestamp of last setpoint crossing  *)
+    rPeakHigh       : REAL;
+    rPeakLow        : REAL;
+    bAboveSetpoint  : BOOL;
+    bFirstCross     : BOOL;
+
+    (* Timeout timer *)
+    tonTimeout      : TON;
+
+    (* Edge detection for request *)
+    bRequestPrev    : BOOL;
+
+    (* Cycle time [s] – estimated from task cycle *)
+    rDt             : REAL := 0.01;
+    rTimeAccum      : REAL;         (* Accumulated time for period measurement [s] *)
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF NOT EN THEN
+    (* Reset all outputs and state when disabled *)
+    bDone       := FALSE;
+    bError      := FALSE;
+    eState      := E_AutotuneState.IDLE;
+    rRelayOut   := 0.0;
+    rKp_new     := 0.0;
+    rTi_new     := 0.0;
+    rTd_new     := 0.0;
+    nCycleCount := 0;
+    rSumPeriod  := 0.0;
+    rSumAmplitude := 0.0;
+    rTimeAccum  := 0.0;
+    bFirstCross := TRUE;
+    ENO         := FALSE;
+    RETURN;
+END_IF
+
+(* ── Timeout watchdog ──────────────────────────────────────────────────── *)
+tonTimeout(IN := (eState <> E_AutotuneState.IDLE AND
+                  eState <> E_AutotuneState.DONE  AND
+                  eState <> E_AutotuneState.ERROR),
+           PT := tTimeout);
+
+IF tonTimeout.Q THEN
+    eState    := E_AutotuneState.ERROR;
+    bError    := TRUE;
+    rRelayOut := 0.0;
+    ENO       := TRUE;
+    RETURN;
+END_IF
+
+(* ── State machine ─────────────────────────────────────────────────────── *)
+CASE eState OF
+
+    E_AutotuneState.IDLE:
+        bDone       := FALSE;
+        bError      := FALSE;
+        rRelayOut   := 0.0;
+        (* Caller sets EN=TRUE to start – already here *)
+        eState      := E_AutotuneState.INIT;
+
+    E_AutotuneState.INIT:
+        nCycleCount   := 0;
+        rSumPeriod    := 0.0;
+        rSumAmplitude := 0.0;
+        rTimeAccum    := 0.0;
+        rPeakHigh     := rProcessValue;
+        rPeakLow      := rProcessValue;
+        bFirstCross   := TRUE;
+        bAboveSetpoint := (rProcessValue >= rSetpoint);
+        (* Start with relay in the direction that will move PV toward setpoint *)
+        IF bAboveSetpoint THEN
+            rRelayOut := -ABS(rRelayAmplitude);
+        ELSE
+            rRelayOut :=  ABS(rRelayAmplitude);
+        END_IF
+        eState := E_AutotuneState.RELAY_HIGH;
+
+    E_AutotuneState.RELAY_HIGH,
+    E_AutotuneState.RELAY_LOW:
+        rTimeAccum := rTimeAccum + rDt;
+
+        (* Track peaks *)
+        IF rProcessValue > rPeakHigh THEN rPeakHigh := rProcessValue; END_IF
+        IF rProcessValue < rPeakLow  THEN rPeakLow  := rProcessValue; END_IF
+
+        (* Detect setpoint crossing with noise band hysteresis *)
+        IF eState = E_AutotuneState.RELAY_HIGH THEN
+            IF rProcessValue > (rSetpoint + rNoiseBand) THEN
+                (* Switch relay low *)
+                rRelayOut  := -ABS(rRelayAmplitude);
+                IF NOT bFirstCross THEN
+                    rSumPeriod    := rSumPeriod + rTimeAccum;
+                    rSumAmplitude := rSumAmplitude + (rPeakHigh - rPeakLow);
+                    nCycleCount   := nCycleCount + 1;
+                    rTimeAccum    := 0.0;
+                    rPeakHigh     := rProcessValue;
+                    rPeakLow      := rProcessValue;
+                    IF nCycleCount >= nCycles THEN
+                        eState := E_AutotuneState.CALCULATING;
+                    ELSE
+                        eState := E_AutotuneState.RELAY_LOW;
+                    END_IF
+                ELSE
+                    bFirstCross := FALSE;
+                    rTimeAccum  := 0.0;
+                    rPeakHigh   := rProcessValue;
+                    rPeakLow    := rProcessValue;
+                    eState      := E_AutotuneState.RELAY_LOW;
+                END_IF
+            END_IF
+        ELSE (* RELAY_LOW *)
+            IF rProcessValue < (rSetpoint - rNoiseBand) THEN
+                rRelayOut := ABS(rRelayAmplitude);
+                eState    := E_AutotuneState.RELAY_HIGH;
+            END_IF
+        END_IF
+
+    E_AutotuneState.CALCULATING:
+        (* Ultimate gain and period from averaged relay data *)
+        (* Ku = 4*d / (π * a)   where d=relay amplitude, a=oscillation amplitude/2 *)
+        (* Tu = average half-period * 2                                              *)
+        VAR_TEMP
+            rKu         : REAL;
+            rTu         : REAL;
+            rAvgAmp     : REAL;
+            rAvgPeriod  : REAL;
+        END_VAR
+
+        IF nCycleCount > 0 THEN
+            rAvgAmp    := (rSumAmplitude / UINT_TO_REAL(nCycleCount)) / 2.0;
+            rAvgPeriod := rSumPeriod / UINT_TO_REAL(nCycleCount);
+
+            IF rAvgAmp > 0.0 THEN
+                rKu := (4.0 * ABS(rRelayAmplitude)) / (3.14159265 * rAvgAmp);
+                rTu := rAvgPeriod;
+
+                (* Ziegler–Nichols PID: Kp=0.6*Ku, Ti=0.5*Tu, Td=0.125*Tu *)
+                rKp_new := 0.6  * rKu;
+                rTi_new := 0.5  * rTu;
+                rTd_new := 0.125 * rTu;
+
+                eState  := E_AutotuneState.DONE;
+                bDone   := TRUE;
+            ELSE
+                eState := E_AutotuneState.ERROR;
+                bError := TRUE;
+            END_IF
+        ELSE
+            eState := E_AutotuneState.ERROR;
+            bError := TRUE;
+        END_IF
+        rRelayOut := 0.0;
+
+    E_AutotuneState.DONE:
+        (* Stay in DONE for one cycle; caller resets EN to return to IDLE *)
+        bDone     := TRUE;
+        rRelayOut := 0.0;
+
+    E_AutotuneState.ERROR:
+        bError    := TRUE;
+        rRelayOut := 0.0;
+
+END_CASE
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

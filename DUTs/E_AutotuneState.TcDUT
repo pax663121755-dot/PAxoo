@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <DUT Name="E_AutotuneState" Id="{a1b2c3d4-0001-0001-0001-000000000002}">
+    <Declaration><![CDATA[
+{attribute 'qualified_only'}
+TYPE E_AutotuneState :
+(
+    IDLE        := 0,   (* Waiting for request                          *)
+    INIT        := 1,   (* Set output to relay+, wait for first cross   *)
+    RELAY_HIGH  := 2,   (* Output at +relay amplitude                   *)
+    RELAY_LOW   := 3,   (* Output at -relay amplitude                   *)
+    COLLECTING  := 4,   (* Averaging oscillation periods / amplitudes   *)
+    CALCULATING := 5,   (* Computing Ku, Tu → Ziegler-Nichols PID       *)
+    DONE        := 6,   (* New parameters written, cleared next cycle   *)
+    ERROR       := 7    (* Timeout or invalid result                    *)
+) UINT;
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
