@@ -24,22 +24,38 @@ VAR
     // Symulator obiektu grzania/chlodzenia (opcjonalnie pod HMI/test)
     stSimParams : ST_HeatingPlantSimParams;
     fbPlantSim : FB_HeatingPlantSimulator;
+    stPhysicalSimParams : ST_HeatingPlantPhysicalSimParams;
+    fbPhysicalPlantSim : FB_HeatingPlantPhysicalSimulator;
     bUseSimulation : BOOL := TRUE;
+    bUsePhysicalSimulation : BOOL := FALSE;
     fAmbientTemperature : LREAL := 22.0;
     fTemperaturePvReal : LREAL := 24.5;
+    fProcessDisturbancePct : LREAL := 0.0;
 END_VAR
 ]]></Declaration>
     <Implementation>
       <ST><![CDATA[
 IF bUseSimulation THEN
-    fbPlantSim(
-        EN := TRUE,
-        fHeatCmdPct := fbTempControl.fHeatAnalogPct,
-        fCoolCmdPct := fbTempControl.fCoolAnalogPct,
-        fAmbientTemp := fAmbientTemperature,
-        stParams := stSimParams
-    );
-    fTemperaturePv := fbPlantSim.fTemperaturePv;
+    IF bUsePhysicalSimulation THEN
+        fbPhysicalPlantSim(
+            EN := TRUE,
+            fHeatCmdPct := fbTempControl.fHeatAnalogPct,
+            fCoolCmdPct := fbTempControl.fCoolAnalogPct,
+            fAmbientTemp := fAmbientTemperature,
+            fDisturbancePct := fProcessDisturbancePct,
+            stParams := stPhysicalSimParams
+        );
+        fTemperaturePv := fbPhysicalPlantSim.fTemperaturePv;
+    ELSE
+        fbPlantSim(
+            EN := TRUE,
+            fHeatCmdPct := fbTempControl.fHeatAnalogPct,
+            fCoolCmdPct := fbTempControl.fCoolAnalogPct,
+            fAmbientTemp := fAmbientTemperature,
+            stParams := stSimParams
+        );
+        fTemperaturePv := fbPlantSim.fTemperaturePv;
+    END_IF;
 ELSE
     fTemperaturePv := fTemperaturePvReal;
 END_IF;

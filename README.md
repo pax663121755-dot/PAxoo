@@ -24,6 +24,11 @@ W repo dodano gotowy zestaw plikow:
 - `TwinCAT/FB_HeatingPlantSimulator.TcPOU`
   - symulator obiektu: wolny start narastania, szybszy przyrost po rozgrzaniu grzalki
   - po odcieciu mocy chlodzenie przyspiesza wraz z czasem bez zasilania
+- `TwinCAT/ST_HeatingPlantPhysicalSimParams.TcDUT`
+  - parametry fizycznego modelu cieplnego R-C-C (grzalka + obiekt)
+- `TwinCAT/FB_HeatingPlantPhysicalSimulator.TcPOU`
+  - fizyczny symulator cieplny (moc grzalki, pojemnosci cieplne, rezystancje cieplne)
+  - dodatkowe wejscie zaklocenia procesu (np. otwarcie drzwi, naplyw zimnego medium)
 
 ## Szybkie uzycie
 
@@ -45,6 +50,8 @@ W repo dodano gotowy zestaw plikow:
 W `PRG_TemperatureControlDemo` dodano:
 - `stSimParams : ST_HeatingPlantSimParams`
 - `fbPlantSim : FB_HeatingPlantSimulator`
+- `stPhysicalSimParams : ST_HeatingPlantPhysicalSimParams`
+- `fbPhysicalPlantSim : FB_HeatingPlantPhysicalSimulator`
 
 Symulator otrzymuje sterowanie:
 - `fHeatCmdPct` (grzanie 0..100%)
@@ -52,6 +59,17 @@ Symulator otrzymuje sterowanie:
 - `fAmbientTemp` (temperatura otoczenia)
 
 oraz zwraca temperature procesu (`fTemperaturePv`), ktora mozna podac bezposrednio na wejscie regulatora.
+
+### Wariant fizyczny R-C-C
+
+`FB_HeatingPlantPhysicalSimulator` modeluje:
+- pojemnosc cieplna grzalki `fHeaterCapacityJPerK`
+- pojemnosc cieplna obiektu `fProcessCapacityJPerK`
+- transfer ciepla grzalka->obiekt przez `fRthHeaterToProcessKPerW`
+- straty obiektu i grzalki do otoczenia przez rezystancje cieplne
+- aktywne chlodzenie i zaklocenie procesu:
+  - `fCoolCmdPct` (chlodzenie sterowane)
+  - `fDisturbancePct` (zaklocenie, np. drzwi komory / zimny wsad)
 
 ## Parametry autotune i diagnostyka modelu
 

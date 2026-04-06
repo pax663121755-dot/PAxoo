@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <DUT Name="ST_HeatingPlantPhysicalSimParams" Id="{bfca5efd-d2e6-4968-a273-d1dbebde5be0}">
+    <Declaration><![CDATA[
+TYPE ST_HeatingPlantPhysicalSimParams :
+STRUCT
+    // Krok i warunki poczatkowe
+    fCycleTimeS : LREAL := 0.1;
+    fHeaterInitTempDegC : LREAL := 22.0;
+    fProcessInitTempDegC : LREAL := 22.0;
+
+    // Moc wykonawcza
+    fHeaterPowerNominalW : LREAL := 3000.0; // 100% grzania
+    fCoolerPowerNominalW : LREAL := 1200.0; // 100% aktywnego chlodzenia
+    fDisturbancePowerNominalW : LREAL := 1000.0; // 100% zaklocenia procesu
+
+    // Parametry fizyczne R-C-C (grzalka + obiekt)
+    fHeaterCapacityJPerK : LREAL := 1500.0;  // C_h
+    fProcessCapacityJPerK : LREAL := 25000.0; // C_p
+    fRthHeaterToProcessKPerW : LREAL := 0.20; // R_hp
+    fRthHeaterToAmbientKPerW : LREAL := 1.20; // R_ha
+    fRthProcessToAmbientKPerW : LREAL := 2.00; // R_pa
+
+    // Przyspieszenie chlodzenia po odcieciu zasilania
+    tOffAccelerationWindow : TIME := T#120S;
+    fOffBoostHeaterLossPct : LREAL := 40.0;  // [%] zmniejszenia R_ha przy dlugim OFF
+    fOffBoostProcessLossPct : LREAL := 30.0; // [%] zmniejszenia R_pa przy dlugim OFF
+
+    // Limity bezpieczenstwa
+    fHeaterMinTemp : LREAL := -50.0;
+    fHeaterMaxTemp : LREAL := 600.0;
+    fProcessMinTemp : LREAL := -50.0;
+    fProcessMaxTemp : LREAL := 400.0;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
