@@ -117,8 +117,6 @@ IF EN THEN
         END_IF;
     ELSE
         bAutoTuneTimerIn := FALSE;
-        bAutoTuneDone := FALSE;
-        bAutoTuneError := FALSE;
 
         fControlError := stParams.fSetpoint - fPvFiltered;
         IF stParams.bManualMode THEN
