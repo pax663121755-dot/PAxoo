@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_TemperatureAutoTune" Id="{A1C21B72-56C5-4B0B-9E9D-6B4288CE0011}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_TemperatureAutoTune
+VAR_INPUT
+    EN : BOOL;
+    boStart : BOOL;
+    boReset : BOOL;
+    fSetpoint : LREAL;
+    fProcessValue : LREAL;
+    fCycleTime_s : LREAL;
+    fStep : LREAL;
+    fBand : LREAL;
+    nCycles : UDINT;
+    fTimeout_s : LREAL;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+    boBusy : BOOL;
+    boDone : BOOL;
+    boError : BOOL;
+    fOutput : LREAL;
+    fKp : LREAL;
+    fTi_s : LREAL;
+    fTd_s : LREAL;
+    fUltimateGain : LREAL;
+    fUltimatePeriod_s : LREAL;
+END_VAR
+VAR
+    boStartOld : BOOL;
+    nState : INT;
+    fCycle_s : LREAL;
+    fRelayStep : LREAL;
+    fBandAbs : LREAL;
+    fElapsed_s : LREAL;
+    fLastToggle_s : LREAL;
+    fHalfCycleSum_s : LREAL;
+    nHalfCycleCount : UDINT;
+    nRequiredHalfCycles : UDINT;
+    fMaxPv : LREAL;
+    fMinPv : LREAL;
+    fAmplitude : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    IF boReset THEN
+        boBusy := FALSE;
+        boDone := FALSE;
+        boError := FALSE;
+        fOutput := 0.0;
+        fKp := 0.0;
+        fTi_s := 0.0;
+        fTd_s := 0.0;
+        fUltimateGain := 0.0;
+        fUltimatePeriod_s := 0.0;
+        nState := 0;
+        fElapsed_s := 0.0;
+        fLastToggle_s := 0.0;
+        fHalfCycleSum_s := 0.0;
+        nHalfCycleCount := 0;
+        fMaxPv := 0.0;
+        fMinPv := 0.0;
+    ELSE
+        fCycle_s := fCycleTime_s;
+        IF fCycle_s <= 0.0 THEN
+            fCycle_s := 0.1;
+        END_IF;
+
+        fRelayStep := ABS(fStep);
+        IF fRelayStep < 0.001 THEN
+            fRelayStep := 10.0;
+        END_IF;
+
+        fBandAbs := ABS(fBand);
+        IF fBandAbs < 0.001 THEN
+            fBandAbs := 0.5;
+        END_IF;
+
+        IF nCycles < 2 THEN
+            nRequiredHalfCycles := 4;
+        ELSE
+            nRequiredHalfCycles := nCycles * 2;
+        END_IF;
+
+        IF boStart AND NOT boStartOld AND NOT boBusy THEN
+            boBusy := TRUE;
+            boDone := FALSE;
+            boError := FALSE;
+            fOutput := fRelayStep;
+            fKp := 0.0;
+            fTi_s := 0.0;
+            fTd_s := 0.0;
+            fUltimateGain := 0.0;
+            fUltimatePeriod_s := 0.0;
+            nState := 1;
+            fElapsed_s := 0.0;
+            fLastToggle_s := 0.0;
+            fHalfCycleSum_s := 0.0;
+            nHalfCycleCount := 0;
+            fMaxPv := fProcessValue;
+            fMinPv := fProcessValue;
+        END_IF;
+
+        IF boBusy THEN
+            fElapsed_s := fElapsed_s + fCycle_s;
+
+            IF fProcessValue > fMaxPv THEN
+                fMaxPv := fProcessValue;
+            END_IF;
+
+            IF fProcessValue < fMinPv THEN
+                fMinPv := fProcessValue;
+            END_IF;
+
+            CASE nState OF
+                1:
+                    IF fProcessValue >= (fSetpoint + fBandAbs) THEN
+                        nState := 2;
+                        fOutput := -fRelayStep;
+                        IF fLastToggle_s > 0.0 THEN
+                            fHalfCycleSum_s := fHalfCycleSum_s + (fElapsed_s - fLastToggle_s);
+                            nHalfCycleCount := nHalfCycleCount + 1;
+                        END_IF;
+                        fLastToggle_s := fElapsed_s;
+                    END_IF;
+                2:
+                    IF fProcessValue <= (fSetpoint - fBandAbs) THEN
+                        nState := 1;
+                        fOutput := fRelayStep;
+                        IF fLastToggle_s > 0.0 THEN
+                            fHalfCycleSum_s := fHalfCycleSum_s + (fElapsed_s - fLastToggle_s);
+                            nHalfCycleCount := nHalfCycleCount + 1;
+                        END_IF;
+                        fLastToggle_s := fElapsed_s;
+                    END_IF;
+            END_CASE;
+
+            IF (fTimeout_s > 0.0) AND (fElapsed_s >= fTimeout_s) THEN
+                boBusy := FALSE;
+                boDone := FALSE;
+                boError := TRUE;
+                fOutput := 0.0;
+            END_IF;
+
+            IF boBusy AND (nHalfCycleCount >= nRequiredHalfCycles) THEN
+                boBusy := FALSE;
+                boDone := TRUE;
+                boError := FALSE;
+                fOutput := 0.0;
+                fAmplitude := (fMaxPv - fMinPv) * 0.5;
+
+                IF (fAmplitude <= 0.0) OR (fHalfCycleSum_s <= 0.0) THEN
+                    boDone := FALSE;
+                    boError := TRUE;
+                ELSE
+                    fUltimatePeriod_s := (fHalfCycleSum_s / UDINT_TO_LREAL(nHalfCycleCount)) * 2.0;
+                    fUltimateGain := (4.0 * fRelayStep) / (3.14159265358979 * fAmplitude);
+                    fKp := 0.6 * fUltimateGain;
+                    fTi_s := 0.5 * fUltimatePeriod_s;
+                    fTd_s := 0.125 * fUltimatePeriod_s;
+                END_IF;
+            END_IF;
+        ELSE
+            fOutput := 0.0;
+        END_IF;
+    END_IF;
+ELSE
+    boBusy := FALSE;
+    boDone := FALSE;
+    boError := FALSE;
+    fOutput := 0.0;
+    fKp := 0.0;
+    fTi_s := 0.0;
+    fTd_s := 0.0;
+    fUltimateGain := 0.0;
+    fUltimatePeriod_s := 0.0;
+    nState := 0;
+    fElapsed_s := 0.0;
+    fLastToggle_s := 0.0;
+    fHalfCycleSum_s := 0.0;
+    nHalfCycleCount := 0;
+    fMaxPv := 0.0;
+    fMinPv := 0.0;
+END_IF;
+
+boStartOld := boStart;
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_TemperaturePid" Id="{A1C21B72-56C5-4B0B-9E9D-6B4288CE0010}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_TemperaturePid
+VAR_INPUT
+    EN : BOOL;
+    fSetpoint : LREAL;
+    fProcessValue : LREAL;
+    fKp : LREAL;
+    fTi_s : LREAL;
+    fTd_s : LREAL;
+    fCycleTime_s : LREAL;
+    fOutputMin : LREAL;
+    fOutputMax : LREAL;
+    boHoldIntegral : BOOL;
+    boReset : BOOL;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+    fOutput : LREAL;
+    fError : LREAL;
+    fIntegral : LREAL;
+END_VAR
+VAR
+    fPreviousPv : LREAL;
+    fCycle_s : LREAL;
+    fOutputLow : LREAL;
+    fOutputHigh : LREAL;
+    fIntegralCandidate : LREAL;
+    fP : LREAL;
+    fD : LREAL;
+    fKi : LREAL;
+    fKd : LREAL;
+    boFirstCycle : BOOL := TRUE;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    IF boReset THEN
+        fOutput := 0.0;
+        fError := 0.0;
+        fIntegral := 0.0;
+        fPreviousPv := fProcessValue;
+        boFirstCycle := TRUE;
+    ELSE
+        fCycle_s := fCycleTime_s;
+        IF fCycle_s <= 0.0 THEN
+            fCycle_s := 0.1;
+        END_IF;
+
+        fOutputLow := fOutputMin;
+        fOutputHigh := fOutputMax;
+        IF fOutputLow > fOutputHigh THEN
+            fOutputLow := -100.0;
+            fOutputHigh := 100.0;
+        END_IF;
+
+        fError := fSetpoint - fProcessValue;
+        fP := fKp * fError;
+
+        IF fTi_s > 0.0 THEN
+            fKi := fKp / fTi_s;
+        ELSE
+            fKi := 0.0;
+        END_IF;
+
+        fKd := fKp * fTd_s;
+
+        IF boFirstCycle THEN
+            fD := 0.0;
+            boFirstCycle := FALSE;
+        ELSE
+            fD := -fKd * ((fProcessValue - fPreviousPv) / fCycle_s);
+        END_IF;
+
+        IF NOT boHoldIntegral THEN
+            fIntegralCandidate := fIntegral + (fKi * fError * fCycle_s);
+
+            IF ((fP + fIntegralCandidate + fD) <= fOutputHigh) OR (fError < 0.0) THEN
+                IF ((fP + fIntegralCandidate + fD) >= fOutputLow) OR (fError > 0.0) THEN
+                    fIntegral := fIntegralCandidate;
+                END_IF;
+            END_IF;
+        END_IF;
+
+        fOutput := fP + fIntegral + fD;
+
+        IF fOutput > fOutputHigh THEN
+            fOutput := fOutputHigh;
+        ELSIF fOutput < fOutputLow THEN
+            fOutput := fOutputLow;
+        END_IF;
+
+        fPreviousPv := fProcessValue;
+    END_IF;
+ELSE
+    fOutput := 0.0;
+    fError := 0.0;
+    fIntegral := 0.0;
+    fPreviousPv := 0.0;
+    boFirstCycle := TRUE;
+END_IF;
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

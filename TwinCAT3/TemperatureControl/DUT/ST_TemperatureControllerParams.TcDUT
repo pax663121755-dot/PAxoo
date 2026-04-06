@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_TemperatureControllerParams" Id="{A1C21B72-56C5-4B0B-9E9D-6B4288CE0001}">
+    <Declaration><![CDATA[
+TYPE ST_TemperatureControllerParams :
+STRUCT
+    boEnableHeating : BOOL := TRUE;
+    boEnableCooling : BOOL := TRUE;
+    fKp : LREAL := 2.0;
+    fTi_s : LREAL := 120.0;
+    fTd_s : LREAL := 5.0;
+    fCycleTime_s : LREAL := 0.1;
+    fOutputMin : LREAL := -100.0;
+    fOutputMax : LREAL := 100.0;
+    fHeatOutputMax : LREAL := 100.0;
+    fCoolOutputMax : LREAL := 100.0;
+    fDeadband : LREAL := 0.2;
+    fAutoTuneStep : LREAL := 25.0;
+    fAutoTuneBand : LREAL := 0.5;
+    nAutoTuneCycles : UDINT := 3;
+    fAutoTuneTimeout_s : LREAL := 1800.0;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

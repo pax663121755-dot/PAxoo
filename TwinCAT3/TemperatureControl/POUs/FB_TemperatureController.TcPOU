@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="FB_TemperatureController" Id="{A1C21B72-56C5-4B0B-9E9D-6B4288CE0012}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_TemperatureController
+VAR_INPUT
+    EN : BOOL;
+END_VAR
+VAR_IN_OUT
+    stParams : ST_TemperatureControllerParams;
+    stHmi : ST_TemperatureControllerHmi;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+END_VAR
+VAR
+    fbPid : FB_TemperaturePid;
+    fbAutoTune : FB_TemperatureAutoTune;
+    boPidEnable : BOOL;
+    boPidReset : BOOL;
+    boPidHoldIntegral : BOOL;
+    boTuneEnable : BOOL;
+    boTuneReset : BOOL;
+    boTuneStart : BOOL;
+    fRequestedOutput : LREAL;
+    fOutputLow : LREAL;
+    fOutputHigh : LREAL;
+    fHeatCommand : LREAL;
+    fCoolCommand : LREAL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    fOutputLow := stParams.fOutputMin;
+    fOutputHigh := stParams.fOutputMax;
+    IF fOutputLow > fOutputHigh THEN
+        fOutputLow := -100.0;
+        fOutputHigh := 100.0;
+    END_IF;
+
+    boTuneEnable := stHmi.boEnable;
+    boTuneReset := stHmi.boReset OR NOT stHmi.boEnable;
+    boTuneStart := stHmi.boEnable AND stHmi.boAutoMode AND stHmi.boStartAutoTune;
+    boPidEnable := stHmi.boEnable AND stHmi.boAutoMode AND NOT stHmi.boStartAutoTune AND NOT fbAutoTune.boBusy;
+    boPidReset := stHmi.boReset OR NOT stHmi.boEnable OR stHmi.boStartAutoTune OR fbAutoTune.boBusy;
+    boPidHoldIntegral := FALSE;
+ELSE
+    boTuneEnable := FALSE;
+    boTuneReset := TRUE;
+    boTuneStart := FALSE;
+    boPidEnable := FALSE;
+    boPidReset := TRUE;
+    boPidHoldIntegral := FALSE;
+    fRequestedOutput := 0.0;
+    fHeatCommand := 0.0;
+    fCoolCommand := 0.0;
+    stHmi.fAnalogOutput := 0.0;
+    stHmi.fHeatingPercent := 0.0;
+    stHmi.fCoolingPercent := 0.0;
+    stHmi.boHeat := FALSE;
+    stHmi.boCool := FALSE;
+    stHmi.boPidActive := FALSE;
+    stHmi.boAutoTuneActive := FALSE;
+    stHmi.boAutoTuneDone := FALSE;
+    stHmi.boAutoTuneError := FALSE;
+    stHmi.fError := 0.0;
+    stHmi.fTunedKu := 0.0;
+    stHmi.fTunedPu_s := 0.0;
+    stHmi.sStatusText := 'DISABLED';
+END_IF;
+
+fbAutoTune(
+    EN := boTuneEnable,
+    boStart := boTuneStart,
+    boReset := boTuneReset,
+    fSetpoint := stHmi.fSetpoint,
+    fProcessValue := stHmi.fProcessValue,
+    fCycleTime_s := stParams.fCycleTime_s,
+    fStep := stParams.fAutoTuneStep,
+    fBand := stParams.fAutoTuneBand,
+    nCycles := stParams.nAutoTuneCycles,
+    fTimeout_s := stParams.fAutoTuneTimeout_s
+);
+
+fbPid(
+    EN := boPidEnable,
+    fSetpoint := stHmi.fSetpoint,
+    fProcessValue := stHmi.fProcessValue,
+    fKp := stParams.fKp,
+    fTi_s := stParams.fTi_s,
+    fTd_s := stParams.fTd_s,
+    fCycleTime_s := stParams.fCycleTime_s,
+    fOutputMin := fOutputLow,
+    fOutputMax := fOutputHigh,
+    boHoldIntegral := boPidHoldIntegral,
+    boReset := boPidReset
+);
+
+IF EN THEN
+    stHmi.fError := fbPid.fError;
+    stHmi.boAutoTuneActive := fbAutoTune.boBusy;
+    stHmi.boAutoTuneDone := fbAutoTune.boDone;
+    stHmi.boAutoTuneError := fbAutoTune.boError;
+    stHmi.fTunedKu := fbAutoTune.fUltimateGain;
+    stHmi.fTunedPu_s := fbAutoTune.fUltimatePeriod_s;
+
+    IF fbAutoTune.boBusy OR fbAutoTune.boDone OR fbAutoTune.boError THEN
+        stHmi.boStartAutoTune := FALSE;
+    END_IF;
+
+    IF fbAutoTune.boDone AND NOT fbAutoTune.boError THEN
+        stParams.fKp := fbAutoTune.fKp;
+        stParams.fTi_s := fbAutoTune.fTi_s;
+        stParams.fTd_s := fbAutoTune.fTd_s;
+    END_IF;
+
+    IF stHmi.boReset THEN
+        fRequestedOutput := 0.0;
+    ELSIF NOT stHmi.boEnable THEN
+        fRequestedOutput := 0.0;
+    ELSIF fbAutoTune.boBusy THEN
+        fRequestedOutput := fbAutoTune.fOutput;
+    ELSIF stHmi.boAutoMode THEN
+        fRequestedOutput := fbPid.fOutput;
+    ELSE
+        fRequestedOutput := stHmi.fManualOutput;
+    END_IF;
+
+    IF fRequestedOutput > fOutputHigh THEN
+        fRequestedOutput := fOutputHigh;
+    ELSIF fRequestedOutput < fOutputLow THEN
+        fRequestedOutput := fOutputLow;
+    END_IF;
+
+    fHeatCommand := 0.0;
+    fCoolCommand := 0.0;
+
+    IF ABS(fRequestedOutput) > ABS(stParams.fDeadband) THEN
+        IF fRequestedOutput > 0.0 THEN
+            IF stParams.boEnableHeating THEN
+                fHeatCommand := fRequestedOutput;
+                IF fHeatCommand > stParams.fHeatOutputMax THEN
+                    fHeatCommand := stParams.fHeatOutputMax;
+                END_IF;
+            END_IF;
+        ELSE
+            IF stParams.boEnableCooling THEN
+                fCoolCommand := ABS(fRequestedOutput);
+                IF fCoolCommand > stParams.fCoolOutputMax THEN
+                    fCoolCommand := stParams.fCoolOutputMax;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+
+    stHmi.fAnalogOutput := fHeatCommand - fCoolCommand;
+    stHmi.fHeatingPercent := fHeatCommand;
+    stHmi.fCoolingPercent := fCoolCommand;
+    stHmi.boHeat := stHmi.boEnable AND (fHeatCommand > 0.0);
+    stHmi.boCool := stHmi.boEnable AND (fCoolCommand > 0.0);
+    stHmi.boPidActive := stHmi.boEnable AND stHmi.boAutoMode AND NOT fbAutoTune.boBusy AND NOT stHmi.boReset;
+
+    IF stHmi.boReset THEN
+        stHmi.sStatusText := 'RESET';
+    ELSIF NOT stHmi.boEnable THEN
+        stHmi.sStatusText := 'DISABLED';
+    ELSIF fbAutoTune.boBusy THEN
+        stHmi.sStatusText := 'AUTOTUNE';
+    ELSIF fbAutoTune.boError THEN
+        stHmi.sStatusText := 'AUTOTUNE_ERROR';
+    ELSIF stHmi.boAutoMode THEN
+        stHmi.sStatusText := 'AUTO_PID';
+    ELSE
+        stHmi.sStatusText := 'MANUAL';
+    END_IF;
+END_IF;
+
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

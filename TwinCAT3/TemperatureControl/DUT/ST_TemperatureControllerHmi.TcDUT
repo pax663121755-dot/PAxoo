@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <DUT Name="ST_TemperatureControllerHmi" Id="{A1C21B72-56C5-4B0B-9E9D-6B4288CE0002}">
+    <Declaration><![CDATA[
+TYPE ST_TemperatureControllerHmi :
+STRUCT
+    boEnable : BOOL;
+    boAutoMode : BOOL := TRUE;
+    boReset : BOOL;
+    boStartAutoTune : BOOL;
+    fSetpoint : LREAL;
+    fProcessValue : LREAL;
+    fManualOutput : LREAL;
+    fAnalogOutput : LREAL;
+    fHeatingPercent : LREAL;
+    fCoolingPercent : LREAL;
+    boHeat : BOOL;
+    boCool : BOOL;
+    boPidActive : BOOL;
+    boAutoTuneActive : BOOL;
+    boAutoTuneDone : BOOL;
+    boAutoTuneError : BOOL;
+    fError : LREAL;
+    fTunedKu : LREAL;
+    fTunedPu_s : LREAL;
+    sStatusText : STRING(31);
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
