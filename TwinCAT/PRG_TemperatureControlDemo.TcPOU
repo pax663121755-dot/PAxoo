@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <POU Name="PRG_TemperatureControlDemo" Id="{6099efad-7309-49c9-9e6c-4afd319741f5}" SpecialFunc="None">
+    <Declaration><![CDATA[
+PROGRAM PRG_TemperatureControlDemo
+VAR
+    // Wejscia procesowe (przyklad)
+    fTemperaturePv : LREAL := 24.5;
+    bEnableControl : BOOL := TRUE;
+    bAutoTunePulse : BOOL := FALSE;
+
+    // Parametry i obiekt regulatora
+    stTempParams : ST_TemperatureControlParams;
+    fbTempControl : FB_TemperatureControl;
+
+    // Wyjscia pod HMI / mapowanie do I/O
+    fAoSignedPct : LREAL;
+    fAoHeatPct : LREAL;
+    fAoCoolPct : LREAL;
+    bDoHeat : BOOL;
+    bDoCool : BOOL;
+    bAutoTuneBusy : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// Przyklad wywolania bloku
+fbTempControl(
+    EN := bEnableControl,
+    fTemperaturePv := fTemperaturePv,
+    bAutoTuneStart := bAutoTunePulse,
+    stParams := stTempParams
+);
+
+// Mapowanie na HMI lub bezposrednio na I/O
+fAoSignedPct := fbTempControl.fAnalogOutputPct;
+fAoHeatPct := fbTempControl.fHeatAnalogPct;
+fAoCoolPct := fbTempControl.fCoolAnalogPct;
+bDoHeat := fbTempControl.bHeatOn;
+bDoCool := fbTempControl.bCoolOn;
+bAutoTuneBusy := fbTempControl.bAutoTuneBusy;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

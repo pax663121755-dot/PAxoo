@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <POU Name="FB_TemperatureControl" Id="{2e5689c7-fbb8-4813-adf5-b7f53dce5a5c}" SpecialFunc="None">
+    <Declaration><![CDATA[
+FUNCTION_BLOCK FB_TemperatureControl
+VAR_INPUT
+    EN : BOOL := TRUE;
+    fTemperaturePv : LREAL; // temperatura mierzona
+    bAutoTuneStart : BOOL;  // impuls z HMI
+END_VAR
+VAR_IN_OUT
+    stParams : ST_TemperatureControlParams;
+END_VAR
+VAR_OUTPUT
+    ENO : BOOL;
+    fControlError : LREAL;
+    fAnalogOutputPct : LREAL; // -100..100, dodatnie=grzanie, ujemne=chlodzenie
+    fHeatAnalogPct : LREAL;   // 0..100
+    fCoolAnalogPct : LREAL;   // 0..100
+    bHeatOn : BOOL;
+    bCoolOn : BOOL;
+    bAutoTuneBusy : BOOL;
+    bAutoTuneDone : BOOL;
+    bAutoTuneError : BOOL;
+END_VAR
+VAR
+    fbAutoTuneTimer : TON;
+    bAutoTuneStartOld : BOOL := FALSE;
+    bAutoTuneTimerIn : BOOL := FALSE;
+
+    fPvFiltered : LREAL := 0.0;
+    fPrevError : LREAL := 0.0;
+    fIntegral : LREAL := 0.0;
+    fDerivative : LREAL := 0.0;
+    fPidRaw : LREAL := 0.0;
+    fPidClamped : LREAL := 0.0;
+
+    fCycleS : LREAL := 0.1;
+    fOutMin : LREAL := -100.0;
+    fOutMax : LREAL := 100.0;
+    fDeadbandAbs : LREAL := 0.3;
+    fHeatMin : LREAL := 0.0;
+    fCoolMin : LREAL := 0.0;
+    fFilterAlpha : LREAL := 0.2;
+
+    fTuneStartTemp : LREAL := 0.0;
+    fTuneDeltaTemp : LREAL := 0.0;
+    fTuneGain : LREAL := 0.0;
+    fTuneTau : LREAL := 1.0;
+    fObserveS : LREAL := 120.0;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+IF EN THEN
+    fCycleS := LIMIT(0.01, stParams.fCycleTimeS, 10.0);
+    fOutMin := stParams.fOutputMin;
+    fOutMax := stParams.fOutputMax;
+    IF fOutMin >= fOutMax THEN
+        fOutMin := -100.0;
+        fOutMax := 100.0;
+    END_IF;
+
+    fDeadbandAbs := ABS(stParams.fDeadband);
+    fHeatMin := LIMIT(0.0, stParams.fHeatMinPct, 100.0);
+    fCoolMin := LIMIT(0.0, stParams.fCoolMinPct, 100.0);
+    fFilterAlpha := LIMIT(0.0, stParams.fFilterAlpha, 1.0);
+    fObserveS := LIMIT(5.0, TIME_TO_LREAL(stParams.tAutoTuneObserve) / 1000.0, 3600.0);
+
+    // Filtr PV, zeby ograniczyc szum na pochodnej PID
+    fPvFiltered := (fFilterAlpha * fTemperaturePv) + ((1.0 - fFilterAlpha) * fPvFiltered);
+
+    IF bAutoTuneStart AND NOT bAutoTuneStartOld AND stParams.bEnableAutoTune AND NOT bAutoTuneBusy THEN
+        bAutoTuneBusy := TRUE;
+        bAutoTuneDone := FALSE;
+        bAutoTuneError := FALSE;
+        bAutoTuneTimerIn := TRUE;
+        fTuneStartTemp := fPvFiltered;
+        fIntegral := 0.0;
+        fPrevError := 0.0;
+    END_IF;
+    bAutoTuneStartOld := bAutoTuneStart;
+
+    IF bAutoTuneBusy THEN
+        bAutoTuneTimerIn := TRUE;
+
+        // W trakcie autotune wymuszamy krok grzania
+        fPidClamped := LIMIT(0.0, ABS(stParams.fAutoTuneStep), 100.0);
+        fAnalogOutputPct := fPidClamped;
+        fHeatAnalogPct := fPidClamped;
+        fCoolAnalogPct := 0.0;
+        bHeatOn := fHeatAnalogPct > 0.0;
+        bCoolOn := FALSE;
+        fControlError := 0.0;
+
+        IF fbAutoTuneTimer.Q THEN
+            bAutoTuneBusy := FALSE;
+            bAutoTuneTimerIn := FALSE;
+
+            fTuneDeltaTemp := fPvFiltered - fTuneStartTemp;
+            IF ABS(fTuneDeltaTemp) >= ABS(stParams.fAutoTuneNoiseBand) THEN
+                fTuneGain := fTuneDeltaTemp / MAX(1.0, ABS(stParams.fAutoTuneStep));
+                IF ABS(fTuneGain) > 0.000001 THEN
+                    // Prosta identyfikacja FOPDT + strojenie IMC
+                    fTuneTau := MAX(0.5, fObserveS * 0.5);
+                    stParams.fKp := ABS(1.0 / fTuneGain);
+                    stParams.fKi := stParams.fKp / fTuneTau;
+                    stParams.fKd := stParams.fKp * fTuneTau * 0.25;
+                    bAutoTuneDone := TRUE;
+                    bAutoTuneError := FALSE;
+                ELSE
+                    bAutoTuneError := TRUE;
+                END_IF;
+            ELSE
+                bAutoTuneError := TRUE;
+            END_IF;
+        END_IF;
+    ELSE
+        bAutoTuneTimerIn := FALSE;
+        bAutoTuneDone := FALSE;
+        bAutoTuneError := FALSE;
+
+        fControlError := stParams.fSetpoint - fPvFiltered;
+        IF stParams.bManualMode THEN
+            fPidRaw := stParams.fManualOutput;
+        ELSE
+            fDerivative := (fControlError - fPrevError) / fCycleS;
+            fPidRaw := (stParams.fKp * fControlError) + (stParams.fKi * fIntegral) + (stParams.fKd * fDerivative);
+
+            // Anty-windup: nie integruj, gdy wyjscie nasycone i blad pcha dalej w nasycenie
+            IF NOT (((fPidRaw > fOutMax) AND (fControlError > 0.0)) OR ((fPidRaw < fOutMin) AND (fControlError < 0.0))) THEN
+                fIntegral := fIntegral + (fControlError * fCycleS);
+            END_IF;
+            fPidRaw := (stParams.fKp * fControlError) + (stParams.fKi * fIntegral) + (stParams.fKd * fDerivative);
+            fPrevError := fControlError;
+        END_IF;
+
+        fPidClamped := LIMIT(fOutMin, fPidRaw, fOutMax);
+        fAnalogOutputPct := fPidClamped;
+
+        IF fPidClamped > fDeadbandAbs THEN
+            fHeatAnalogPct := LIMIT(fHeatMin, fPidClamped, 100.0);
+            fCoolAnalogPct := 0.0;
+            bHeatOn := fHeatAnalogPct > 0.0;
+            bCoolOn := FALSE;
+        ELSIF fPidClamped < (-fDeadbandAbs) THEN
+            fCoolAnalogPct := LIMIT(fCoolMin, ABS(fPidClamped), 100.0);
+            fHeatAnalogPct := 0.0;
+            bCoolOn := fCoolAnalogPct > 0.0;
+            bHeatOn := FALSE;
+        ELSE
+            fHeatAnalogPct := 0.0;
+            fCoolAnalogPct := 0.0;
+            bHeatOn := FALSE;
+            bCoolOn := FALSE;
+        END_IF;
+    END_IF;
+ELSE
+    // Reset bloku do stanu 0 gdy EN=FALSE
+    fControlError := 0.0;
+    fAnalogOutputPct := 0.0;
+    fHeatAnalogPct := 0.0;
+    fCoolAnalogPct := 0.0;
+    bHeatOn := FALSE;
+    bCoolOn := FALSE;
+    bAutoTuneBusy := FALSE;
+    bAutoTuneDone := FALSE;
+    bAutoTuneError := FALSE;
+    bAutoTuneStartOld := FALSE;
+    bAutoTuneTimerIn := FALSE;
+    fPvFiltered := 0.0;
+    fPrevError := 0.0;
+    fIntegral := 0.0;
+    fDerivative := 0.0;
+    fPidRaw := 0.0;
+    fPidClamped := 0.0;
+    fTuneStartTemp := 0.0;
+    fTuneDeltaTemp := 0.0;
+    fTuneGain := 0.0;
+    fTuneTau := 1.0;
+END_IF;
+
+fbAutoTuneTimer(IN := bAutoTuneTimerIn, PT := stParams.tAutoTuneObserve);
+ENO := EN;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

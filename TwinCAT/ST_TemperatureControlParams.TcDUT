@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.0">
+  <DUT Name="ST_TemperatureControlParams" Id="{1f3be16f-9838-4c42-93ca-f20cf1730e53}">
+    <Declaration><![CDATA[
+TYPE ST_TemperatureControlParams :
+STRUCT
+    // Nastawy podstawowe (HMI)
+    fSetpoint : LREAL := 25.0;
+    bManualMode : BOOL := FALSE;
+    fManualOutput : LREAL := 0.0; // -100..100 [%]
+
+    // PID
+    fKp : LREAL := 2.0;
+    fKi : LREAL := 0.1;
+    fKd : LREAL := 0.0;
+    fCycleTimeS : LREAL := 0.1;
+    fFilterAlpha : LREAL := 0.2; // 0..1 filtr PV
+
+    // Limity i logika grzanie/chlodzenie
+    fOutputMin : LREAL := -100.0; // ujemne = chlodzenie
+    fOutputMax : LREAL := 100.0;  // dodatnie = grzanie
+    fDeadband : LREAL := 0.3;
+    fHeatMinPct : LREAL := 0.0;
+    fCoolMinPct : LREAL := 0.0;
+
+    // Autotuning
+    bEnableAutoTune : BOOL := TRUE;
+    fAutoTuneStep : LREAL := 25.0; // [%]
+    tAutoTuneObserve : TIME := T#120S;
+    fAutoTuneNoiseBand : LREAL := 0.2;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
